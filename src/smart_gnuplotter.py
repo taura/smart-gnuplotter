@@ -1,4 +1,4 @@
-import os,sqlite3,types,sys
+import os,sqlite3,types,sys,re
 
 dbg=0
 
@@ -15,7 +15,8 @@ class smart_gnuplotter:
         self.default_collations = []
         self.gpl_file_counter = 0
         
-    def open_sql(self, database, init_script, init_file, functions, aggregates, collations):
+    def open_sql(self, database, init_script, init_file, 
+                 functions, aggregates, collations):
         co = sqlite3.connect(database)
         if functions is None: 
             functions = self.default_functions
@@ -123,7 +124,25 @@ class smart_gnuplotter:
                 self.default_pause = 0
         return 0
 
-    def show_graph(self, pause, gpl, remove):
+    def is_epslatex(self, terminal):
+        if re.match(" *epslatex", terminal):
+            return 1
+        else:
+            return 0
+
+    def fix_include_graphics(self, tex):
+        tex2 = "%s.tmp" % tex
+        fp = open(tex, "rb")
+        x = fp.read()
+        fp.close()
+        y = re.sub("includegraphics\{([^\}]+)\}", 
+                   r"includegraphics{\1.eps}", x)
+        wp = open(tex2, "wb")
+        wp.write(y)
+        wp.close()
+        os.rename(tex2, tex)
+
+    def show_graph(self, terminal, output, pause, gpl, remove):
         if dbg>=3:
             Es("  show_graph\n")
         self.write_tics(self.args)
@@ -134,6 +153,8 @@ class smart_gnuplotter:
         if r == 0:
             r = self.prompt()
             if remove: self.remove(gpl)
+            if self.is_epslatex(terminal):
+                self.fix_include_graphics(output)
         else:
             Es("error: gnuplot command failed with %d, file '%s' is "
                "left for your inspection\n" % (r, gpl))
@@ -278,16 +299,16 @@ class smart_gnuplotter:
               { "a" : 2, "b" : 4 } ]
 
         """
-        V = {}
-        A = []
-        D = self.expand_vars_rec(K, V, A)
-        R = D.copy()
-        for k,v in D.items():
-            if type(v) is types.TupleType:
-                for i in range(len(v)):
-                    ki = "%s[%d]" % (k, i)
-                    vi = v[i]
-                    R[ki] = vi
+        R = []
+        for D in self.expand_vars_rec(K, {}, []):
+            E = D.copy()
+            for k,v in D.items():
+                if type(v) is types.TupleType:
+                    for i in range(len(v)):
+                        ki = "%s[%d]" % (k, i)
+                        vi = v[i]
+                        E[ki] = vi
+            R.append(E)
         return R
 
     def add_curves(self, expr, curve_attr, variables, graph_binding):
@@ -318,7 +339,8 @@ class smart_gnuplotter:
         for expr,curve_attr,variables in curves:
             self.add_curves(expr, curve_attr, variables, graph_binding)
 
-    def graph_canonical(self, graph_attr, graph_binding, curves, pause, gpl_file):
+    def graph_canonical(self, terminal, output, graph_attr, graph_binding, 
+                        curves, pause, gpl_file):
         """
         write a single graph (may contain many curves).
         curves : see add_many_curves for its type
@@ -336,10 +358,11 @@ class smart_gnuplotter:
         gpl = gpl_file % graph_binding
         self.set_graph_attr(graph_attr, graph_binding, gpl)
         self.add_many_curves(curves, graph_binding)
-        r = self.show_graph(pause, gpl, remove)
+        r = self.show_graph(terminal, output, pause, gpl, remove)
         return r
 
-    def graphs_canonical(self, graph_attr_template, graph_variables, curves, 
+    def graphs_canonical(self, terminal_template, output_template, 
+                         graph_attr_template, graph_variables, curves, 
                          pause, gpl_file):
         if dbg>=3:
             Es("graphs_canonical(graph_attr_template=%s,graph_variables=%s,curves=%s)" % 
@@ -349,8 +372,10 @@ class smart_gnuplotter:
             Es(" graph_bindings=%s" % graph_bindings)
         for graph_binding in graph_bindings:
             graph_attr = graph_attr_template % graph_binding
-            r = self.graph_canonical(graph_attr, graph_binding, curves, 
-                                     pause, gpl_file)
+            terminal = terminal_template % graph_binding
+            output = output_template % graph_binding
+            r = self.graph_canonical(terminal, output, graph_attr, 
+                                     graph_binding, curves, pause, gpl_file)
             if r: 
                 return r      # NG
         return 0                # OK
@@ -408,7 +433,8 @@ class smart_gnuplotter:
         curves = [ (expr_template, curve_attr, curve_variables) ]
         for expr,mod in overlays:
             curves.append((expr, mod, {}))
-        r = self.graphs_canonical(graph_attr, graph_variables, curves, pause, gpl_file)
+        r = self.graphs_canonical(terminal, output, graph_attr, 
+                                  graph_variables, curves, pause, gpl_file)
         if r and self.exit_on_error:
             if os.WIFEXITED(r):
                 sys.exit(os.WEXITSTATUS(r))
