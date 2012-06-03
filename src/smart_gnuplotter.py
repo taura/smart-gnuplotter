@@ -8,7 +8,8 @@ def Es(s):
 class smart_gnuplotter:
     def __init__(self):
         self.exit_on_error = 1
-        self.default_terminal = "wxt"
+        self.default_terminal = None
+        self.default_output = None
         self.default_pause = -1
         self.default_functions = []
         self.default_aggregates = []
@@ -125,10 +126,9 @@ class smart_gnuplotter:
         return 0
 
     def is_epslatex(self, terminal):
-        if re.match(" *epslatex", terminal):
-            return 1
-        else:
-            return 0
+        if terminal is None: return 0
+        if re.match(" *epslatex", terminal): return 1
+        return 0
 
     def fix_include_graphics(self, tex):
         tex2 = "%s.tmp" % tex
@@ -372,8 +372,14 @@ class smart_gnuplotter:
             Es(" graph_bindings=%s" % graph_bindings)
         for graph_binding in graph_bindings:
             graph_attr = graph_attr_template % graph_binding
-            terminal = terminal_template % graph_binding
-            output = output_template % graph_binding
+            if terminal_template is None:
+                terminal = None
+            else:
+                terminal = terminal_template % graph_binding
+            if output_template is None:
+                output = None
+            else:
+                output = output_template % graph_binding
             r = self.graph_canonical(terminal, output, graph_attr, 
                                      graph_binding, curves, pause, gpl_file)
             if r: 
@@ -407,6 +413,7 @@ class smart_gnuplotter:
         if terminal is None: terminal = self.default_terminal
         if terminal is not None: 
             graph_attr = 'set terminal %s\n%s' % (terminal, graph_attr)
+        if output is None: output = self.default_output
         if output is not None: 
             graph_attr = 'set output "%s"\n%s' % (output, graph_attr)
         if xrange is not None: 
