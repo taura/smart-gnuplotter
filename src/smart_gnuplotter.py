@@ -930,6 +930,26 @@ class smart_gnuplotter:
         add_plots.  See the documentation of the above two
         methods for details.
 
+        overlays is a python list and gives a convenient way to put
+        many plots that are difficult to parameterize with a single
+        set of parameters.  For example, overlays=[("x", {})]
+        puts a plot y=x in the same graph.
+
+        Each element of the list is 
+        (expression, dictionary)
+        In the dictionary, you may specify any key-value pair
+        you may give to add_plots.  For example,
+        overlays=[("x", { "plot_title" : "ideal", "plot_with" : "lines" })]
+        is equivalent to 
+          add_plots("x", plot_title="ideal", plot_with="lines")
+        In essence, each element is translated into a call
+          add_plots(expression, **dictionary)
+        overlays parameter is primarily meant to put a simple
+        plot or two in a graph you want to show your data in.  
+        To overlay multiple graphs of different kinds, the better
+        practice will be to call set_graph_attrs(), make a series
+        of calls to add_plots() and finally call show_graphs().
+        
         """
         if _dbg>=3:
             _Es('graphs("%s", graph_vars=%s, overlays=%s)\n' 

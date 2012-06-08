@@ -316,7 +316,27 @@ set_graph_attrs&nbsp;or&nbsp;add_plots.&nbsp;&nbsp;Parameters&nbsp;accepted&nbsp
 set_graph_attrs&nbsp;and&nbsp;paramters&nbsp;specified&nbsp;in&nbsp;the&nbsp;'graph_vars'<br>
 are&nbsp;given&nbsp;to&nbsp;set_graph_attr.&nbsp;Other&nbsp;parameters&nbsp;are&nbsp;given&nbsp;to<br>
 add_plots.&nbsp;&nbsp;See&nbsp;the&nbsp;documentation&nbsp;of&nbsp;the&nbsp;above&nbsp;two<br>
-methods&nbsp;for&nbsp;details.</tt></dd></dl>
+methods&nbsp;for&nbsp;details.<br>
+&nbsp;<br>
+overlays&nbsp;is&nbsp;a&nbsp;python&nbsp;list&nbsp;and&nbsp;gives&nbsp;a&nbsp;convenient&nbsp;way&nbsp;to&nbsp;put<br>
+many&nbsp;plots&nbsp;that&nbsp;are&nbsp;difficult&nbsp;to&nbsp;parameterize&nbsp;with&nbsp;a&nbsp;single<br>
+set&nbsp;of&nbsp;parameters.&nbsp;&nbsp;For&nbsp;example,&nbsp;overlays=[("x",&nbsp;{})]<br>
+puts&nbsp;a&nbsp;plot&nbsp;y=x&nbsp;in&nbsp;the&nbsp;same&nbsp;graph.<br>
+&nbsp;<br>
+Each&nbsp;element&nbsp;of&nbsp;the&nbsp;list&nbsp;is&nbsp;<br>
+(expression,&nbsp;dictionary)<br>
+In&nbsp;the&nbsp;dictionary,&nbsp;you&nbsp;may&nbsp;specify&nbsp;any&nbsp;key-value&nbsp;pair<br>
+you&nbsp;may&nbsp;give&nbsp;to&nbsp;add_plots.&nbsp;&nbsp;For&nbsp;example,<br>
+overlays=[("x",&nbsp;{&nbsp;"plot_title"&nbsp;:&nbsp;"ideal",&nbsp;"plot_with"&nbsp;:&nbsp;"lines"&nbsp;})]<br>
+is&nbsp;equivalent&nbsp;to&nbsp;<br>
+&nbsp;&nbsp;<a href="#smart_gnuplotter-add_plots">add_plots</a>("x",&nbsp;plot_title="ideal",&nbsp;plot_with="lines")<br>
+In&nbsp;essence,&nbsp;each&nbsp;element&nbsp;is&nbsp;translated&nbsp;into&nbsp;a&nbsp;call<br>
+&nbsp;&nbsp;<a href="#smart_gnuplotter-add_plots">add_plots</a>(expression,&nbsp;**dictionary)<br>
+overlays&nbsp;parameter&nbsp;is&nbsp;primarily&nbsp;meant&nbsp;to&nbsp;put&nbsp;a&nbsp;simple<br>
+plot&nbsp;or&nbsp;two&nbsp;in&nbsp;a&nbsp;graph&nbsp;you&nbsp;want&nbsp;to&nbsp;show&nbsp;your&nbsp;data&nbsp;in.&nbsp;&nbsp;<br>
+To&nbsp;overlay&nbsp;multiple&nbsp;graphs&nbsp;of&nbsp;different&nbsp;kinds,&nbsp;the&nbsp;better<br>
+practice&nbsp;will&nbsp;be&nbsp;to&nbsp;call&nbsp;<a href="#smart_gnuplotter-set_graph_attrs">set_graph_attrs</a>(),&nbsp;make&nbsp;a&nbsp;series<br>
+of&nbsp;calls&nbsp;to&nbsp;<a href="#smart_gnuplotter-add_plots">add_plots</a>()&nbsp;and&nbsp;finally&nbsp;call&nbsp;<a href="#smart_gnuplotter-show_graphs">show_graphs</a>().</tt></dd></dl>
 
 <dl><dt><a name="smart_gnuplotter-set_graph_attrs"><strong>set_graph_attrs</strong></a>(self, **kw)</dt><dd><tt>This&nbsp;method&nbsp;sets&nbsp;the&nbsp;attribute&nbsp;of&nbsp;the&nbsp;graphs&nbsp;that&nbsp;will<br>
 be&nbsp;drawn&nbsp;by&nbsp;the&nbsp;next&nbsp;call&nbsp;to&nbsp;<a href="#smart_gnuplotter-show_graphs">show_graphs</a>().&nbsp;&nbsp;For&nbsp;example,<br>
