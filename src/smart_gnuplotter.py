@@ -1,23 +1,517 @@
-import os,sqlite3,types,sys,re,math,traceback
+import sqlite3,sys,os,types,math,traceback,re
 
-dbg=0
+_dbg=0
+
+def _Es(s):
+    sys.stderr.write(s)
+
+class graph_attributes:
+    def __init__(self, kw, sg):
+        K = kw.copy()
+        self.plot        = K.pop("plot",        sg.default_plot)
+        self.terminal    = K.pop("terminal",    sg.default_terminal)
+        self.output      = K.pop("output",      sg.default_output)
+        self.graph_title = K.pop("graph_title", sg.default_graph_title)
+        self.xrange      = K.pop("xrange",      sg.default_xrange)
+        self.yrange      = K.pop("yrange",      sg.default_yrange)
+        self.xlabel      = K.pop("xlabel",      sg.default_xlabel)
+        self.ylabel      = K.pop("ylabel",      sg.default_ylabel)
+        self.boxwidth    = K.pop("boxwidth",    sg.default_boxwidth)
+        self.graph_attr  = K.pop("graph_attr",  sg.default_graph_attr)
+        self.pause       = K.pop("pause",       sg.default_pause)
+        self.gpl_file    = K.pop("gpl_file",    sg.default_gpl_file)
+        self.save_gpl    = K.pop("save_gpl",    sg.default_save_gpl)
+        for k,vals in K.items():
+            if type(vals) is not types.ListType:
+                _Es("warning: the value you supplied for graph parameter '%s' is not a list (%s). "
+                   "the parameter '%s' ignored." % (k, vals, k))
+                del K[k]
+        self.variables = K
+
+    def _is_string(self, x):
+        if type(x) is types.StringType or type(x) is types.UnicodeType:
+            return 1
+        else:
+            return 0
+
+    def _is_critical(self, k):
+        if k == "gpl_file":
+            return 1
+        else:
+            return 0
+
+    def _safe_instantiate(self, k, v, binding):
+        try:
+            return v % binding
+        except KeyError,e:
+            _Es("warning: could not instantiate template '%s' (for %s), "
+               "missing value for '%s' (bindings = %s)\n" 
+               % (v, k, e.args[0], binding))
+            if self._is_critical(k):
+                return None
+            else:
+                return v
+
+    def _instantiate(self, binding, sg):
+        D = {}
+        for k,v in self.__dict__.items():
+            if k == "variables":
+                pass
+            elif self._is_string(v):
+                new_v = self._safe_instantiate(k, v, binding)
+                if new_v is None: return None
+                D[k] = new_v
+        for k,v in self.variables.items():
+            D[k] = v
+        return graph_attributes(D, sg)
+
+    def _canonicalize(self, sg):
+        if self.terminal is None: 
+            self.terminal = sg.default_terminal
+
+    def _get_terminal_type(self):
+        """
+        terminal : string : specifies thee full gnuplot terminal string,
+         such as "epslatex size 10cm,5cm"
+
+        extract the 'type' from the terminal spec ("epslatex" from
+        "epslatex size 10cm,5cm"
+        """
+        f = self.terminal.split()
+        if len(f) == 0:
+            return ""
+        else:
+            return f[0].lower()
+
+    def _is_epslatex(self):
+        if self._get_terminal_type() == "epslatex":
+            return 1
+        else:
+            return 0
+
+    def _is_display(self):
+        t = self._get_terminal_type()
+        if t == "" or t == "wxt" or t == "x11" or t == "xterm":
+            return 1
+        else:
+            return 0
+
+    def _show(self, indent):
+        for k,v in self.__dict__.items():
+            if k != "variables":
+                _Es(" " * indent)
+                _Es("%s : %s\n" % (k, v))
+
+
+class plots_spec:
+    def __init__(self, expr, kw, sg):
+        K = kw.copy()
+        self.expr       = expr
+        self.plot_title = K.pop("plot_title", sg.default_plot_title)
+        self.plot_with  = K.pop("plot_with",  sg.default_plot_with)
+        self.using      = K.pop("using",      sg.default_using)
+        self.plot_attr  = K.pop("plot_attr", sg.default_plot_attr)
+        for k,vals in K.items():
+            if type(vals) is not types.ListType:
+                _Es("warning: the value you supplied for plot parameter '%s' is not a list (%s). "
+                   "the parameter '%s' ignored." % (k, vals, k))
+                del K[k]
+        self.variables  = K
+
+    def _is_string(self, x):
+        if type(x) is types.StringType or type(x) is types.UnicodeType:
+            return 1
+        else:
+            return 0
+
+    def _is_critical(self, k):
+        if k == "expr":
+            return 1
+        else:
+            return 0
+
+    def _safe_instantiate(self, k, v, binding):
+        try:
+            return v % binding
+        except KeyError,e:
+            _Es("warning: could not instantiate template '%s' (for %s), "
+               "missing value for '%s' (bindings = %s)\n" 
+               % (v, k, e.args[0], binding))
+            if self._is_critical(k):
+                return None
+            else:
+                return v
+
+    def _expand_sql(self, sql, sg):
+        db,query = sql[0],sql[1]
+        init_s = ""
+        init_f = ""
+        funcs = []
+        aggrs = []
+        colls = []
+        if len(sql) > 2: init_s = sql[2]
+        if len(sql) > 3: init_f = sql[3]
+        if len(sql) > 4: funcs = sql[4]
+        if len(sql) > 5: aggrs = sql[5]
+        if len(sql) > 6: colls = sql[6]
+        return sg._do_sql_noex(db, query, init_s, init_f, 
+                               funcs, aggrs, colls, 0, 0)
+    
+    def _instantiate(self, binding, graph_binding, sg):
+        if _dbg>=3:
+            _Es('    plots_spec.instantiate(binding=%s, graph_binding=%s)\n'
+               % (binding, graph_binding))
+        all_binding = binding.copy()
+        all_binding.update(graph_binding)
+        D = {}
+        for k,v in self.__dict__.items():
+            if k == "variables" or k == "expr":
+                pass
+            elif self._is_string(v):
+                if _dbg>=4:
+                    _Es('     template = %s)' % v)
+                D[k] = self._safe_instantiate(k, v, all_binding)
+            else:
+                D[k] = v
+        for k,v in self.variables.items():
+            D[k] = v
+        if self._is_string(self.expr):
+            e = self._safe_instantiate("expr", self.expr, all_binding)
+            if e is None: return None
+            return plots_spec(e, D, sg)
+        elif type(self.expr) is types.TupleType:
+            # sql query
+            i = lambda x: self._safe_instantiate("expr", x, all_binding)
+            sql = tuple(map(i, self.expr))
+            if sql[0] is None or sql[1] is None: return None
+            e = self._expand_sql(sql, sg)
+            if e is None: return None
+            return plots_spec(e, D, sg)
+        else:
+            return plots_spec(self.expr, D, sg)
+
+    def _show(self, indent):
+        for k,v in self.__dict__.items():
+            if k != "variables":
+                _Es(" " * indent)
+                _Es("%s : %s\n" % (k, v))
 
 class smart_gnuplotter:
+    """
+    smart_gnuplotter provides a higher level interface to gnuplot,
+    making it particularly easy to generate many graphs of many
+    plots with a single command.  A basic example is as follows:
+
+    g = smart_gnuplotter()
+    g.graphs('sin(x)')
+    
+    You will see the plot of sin(x) on display, just as you will
+    when you type
+       plot sin(x)
+    to gnuplot.
+
+    More interestingly, you can generate multiple plots by giving
+    a parameterized expression and values for the pameters. For 
+    example,
+
+    g.graphs('sin(%(a)s * x)', a=[1,2,3])
+
+    will show you three plots sin(1 * x), sin(2 * x), and sin(3 * x).
+    It is as if you type 
+       plot sin(1 * x),sin(2 * x),sin(3 * x)
+    to gnuplot.  You may have multiple parameters, in which case
+    all combinations are generated.
+
+    Finally, you can generate multiple graphs by specifying some of
+    parameters as "graph_vars". For example,
+
+    g.graphs('sin(%(a)s * x + %(b)s * pi)', 
+             a=[1,2], b=[0.0, 0.2], graph_vars=['a'])
+
+    will generate two graphs, one for a=1 and the other for a=2.
+    Each graph has two plots, one for b=0.0 and the other for 0.2
+
+    You can give to the first argument either
+    (1) python string (e.g., 'sin(x)', '"data.txt"', '"< cut -b 9-19 file.txt"'), 
+    which are simply passed to gnuplot's plot command
+    (2) python list, which are passed to gnuplot as in-place data (plot '-')
+    (3) python tuple, which are treated as q query to sqlite3 database
+    and the query results are passed to gnuplot as in-place data
+
+    The last feature, combined with the parameterization, makes it 
+    particularly powerful to show data in database from various angles
+    and with various data selection criterion.
+
+    You may overlay multiple different plots in the following step.
+    g.set_graph_attrs()
+    g.add_plots('sin(%(a)s * x)', a=[1,2])
+    g.add_plots('%(b)s * x * x', b=[3,4])
+    g.show_graphs()
+
+    Essentially, g.graphs(expr) is a shortcut of the above
+
+    g.set_graph_attrs()
+    g.add_plots(expr)
+    g.show_graphs()
+
+    There are ways to specify whatever attributes you can specify with
+    gnuplot.  Changing a terminal for all graphs takes a single line.
+    See the explanation of the following methods for details.
+    
+    set_graph_attrs()
+    add_plots()
+
+    """
     def __init__(self):
-        self.exit_on_error = 1
-        self.default_terminal = None
-        self.default_output = None
+        self.default_plot = "plot"
+        self.default_terminal = ""
+        self.default_output = ""
+        self.default_graph_title = ""
+        self.default_xrange = ""
+        self.default_yrange = ""
+        self.default_xlabel = ""
+        self.default_ylabel = ""
+        self.default_boxwidth = ""
+        self.default_graph_attr = ""
         self.default_pause = -1
+        self.default_gpl_file = ""
+        self.default_save_gpl = 0
+        # plot attributes
+        self.default_plot_title = None
+        self.default_plot_with = ""
+        self.default_using = ""
+        self.default_plot_attr = ""
+        # 
+        self.default_overlays = []
+        # specify which ones in variables are graph variables
+        self.default_graph_vars = []
+        # 
         self.default_functions = []
         self.default_aggregates = [ ("cimin", 2, cimin), ("cimax", 2, cimax) ]
         self.default_collations = []
         self.gpl_file_counter = 0
-        
-    def __Es(self, s):
-        sys.stderr.write(s)
+        self.quit = 0
 
-    def __open_sql(self, database, init_statements, init_file, 
-                 functions, aggregates, collations):
+    def _show_kw(self, kw, indent):
+        for k,v in kw.items():
+            if k != "variables":
+                _Es(" " * indent)
+                _Es("%s : %s\n" % (k, v))
+
+    def _run_gnuplot(self, filename):
+        """
+        run gnuplot filename
+        and return the status
+        """
+        cmd = "gnuplot %s" % filename
+        if _dbg>=1: _Es("%s\n" % cmd)
+        return os.system(cmd)
+
+    def _safe_int(self, line):
+        try:
+            return int(line)
+        except ValueError:
+            return None
+
+    def _expand_vars_rec(self, K, V, A):
+        """
+        K : a dictionary containing variables to expand
+        V : a dictionary containing variables that have been bound
+        A : a list to accumulate all bindings
+        """
+        if len(K) == 0:
+            A.append(V.copy())
+        else:
+            k,vals = K.popitem()
+            assert (type(vals) is types.ListType), (k, vals)
+            for v in vals:
+                assert (k not in V), (k, V)
+                V[k] = v
+                self._expand_vars_rec(K, V, A)
+                del V[k]
+            K[k] = vals
+        return A
+
+    def _expand_vars(self, K):
+        """
+        e.g., 
+        expand_vars({ "a" : [1,2], "b" : [3,4] })
+
+        ==> [ { "a" : 1, "b" : 3 },
+              { "a" : 1, "b" : 4 },
+              { "a" : 2, "b" : 3 },
+              { "a" : 2, "b" : 4 } ]
+
+        """
+        if _dbg>=3:
+            _Es('    expand_vars(vars=%s)\n' % K)
+        R = []
+        for D in self._expand_vars_rec(K, {}, []):
+            E = D.copy()
+            for k,v in D.items():
+                # when the value is a tuple (e.g., "x" : (3, 4)),
+                # register "x[0]" : 3 and "x[1]" : 4 as well
+                if type(v) is types.TupleType:
+                    for i in range(len(v)):
+                        ki = "%s[%d]" % (k, i)
+                        vi = v[i]
+                        if _dbg>=3:
+                            _Es('     adding binding %s <- %s\n' % (ki, vi))
+                        E[ki] = vi
+            R.append(E)
+        return R
+
+
+    def _expand_plots(self, graph_binding):
+        if _dbg>=3:
+            _Es('   expand_plots(graph_binding=%s)\n' % graph_binding)
+        plots = []
+        for p in self.plots:
+            bindings = self._expand_vars(p.variables)
+            if _dbg>=3:
+                _Es('    -> bindings = %s\n' % bindings)
+            for binding in bindings:
+                q = p._instantiate(binding, graph_binding, self)
+                if q is None: return None
+                if _dbg>=3:
+                    _Es('    -->\n')
+                    q._show(5)
+                plots.append(q)
+        return plots
+
+    def _x_is_symbol(self, data):
+        for row in data:
+            try:
+                float(row[0])
+            except:
+                return 1
+        return 0
+
+    def _write_plots_tics(self, wp, plots):
+        T = {}                  # symbol -> position
+        for ps in plots:
+            if type(ps.expr) is types.ListType:
+                if self._x_is_symbol(ps.expr):
+                    for row in ps.expr:
+                        if row[0] not in T:
+                            T[row[0]] = len(T)
+        if len(T) > 0:
+            A = []
+            for k,v in T.items():
+                A.append('"%s" %d' % (k, v))
+            wp.write('set xtics (%s)\n' % ", ".join(A))
+            return T
+        else:
+            return None
+
+    def _write_plots_exprs(self, wp, ga, plots):
+        E = []
+        for ps in plots:
+            e = []
+            if type(ps.expr) is types.ListType or type(ps.expr) is types.TupleType:
+                # python list or query
+                e.append("'-'")
+            else:
+                e.append(ps.expr)
+            if ps.using != "": e.append("using %s" % ps.using)
+            if ps.plot_with != "": e.append('with %s' % ps.plot_with)
+            if ps.plot_title is not None: e.append('title "%s"' % ps.plot_title)
+            e.append('%s' % ps.plot_attr)
+            E.append(" ".join(e))
+        wp.write("%s %s\n" % (ga.plot, ", ".join(E)))
+
+    def _write_plots_data(self, wp, plots, tics):
+        for ps in plots:
+            if type(ps.expr) is types.ListType:
+                if tics is None:
+                    for row in ps.expr:
+                        wp.write("%s\n" % " ".join(map(str, row)))
+                else:
+                    for row in ps.expr:
+                        row = (tics[row[0]],) + row[1:]
+                        wp.write("%s\n" % " ".join(map(str, row)))
+                wp.write("e\n")
+
+    def _write_pause(self, wp, ga):
+        if ga._is_display():
+            wp.write("pause %d\n" % ga.pause)
+
+    def _tmp_gpl_file(self):
+        f = "tmp_%d.gpl" % self.gpl_file_counter
+        self.gpl_file_counter = self.gpl_file_counter + 1
+        return f
+
+    def _open_gpl(self, ga):
+        gpl_file = ga.gpl_file
+        if gpl_file == "": gpl_file = self._tmp_gpl_file()
+        if _dbg>=3:
+            _Es('   open gpl_file %s\n' % gpl_file)
+        wp = open(gpl_file, "wb")
+        return gpl_file,wp
+
+    def _cleanup_gpl(self, ga, gpl_file):
+        if ga.save_gpl == 0:
+            if _dbg>=1:
+                _Es("remove %s\n" % gpl_file)
+            os.remove(gpl_file)
+
+    def _ext_name(self, output, ga):
+        t = ga._get_terminal_type()
+        ext_D = {
+            "epslatex" : ".tex",
+            "latex"    : ".tex",
+            "fig"     : ".tex",
+            "texdraw" : ".tex",
+            "pslatex" : ".tex",
+            "pstex"   : ".tex",
+            "postscript" : ".eps",
+            "jpeg"    : ".jpg",
+            "svg"     : ".svg",
+            "gif"     : ".gif",
+            "png"     : ".png", }
+        return output + ext_D.get(t, "")
+
+    def _fix_include_graphics(self, tex):
+        """
+        tex : string : filename output by epslatex
+        fix the \includegraphics{file} line of the tex file
+        to \includegraphics{file.eps}.  this is necessary
+        to make it possible to load this file with dvipdfm
+        driver
+        """
+        tex2 = "%s.tmp" % tex
+        fp = open(tex, "rb")
+        x = fp.read()
+        fp.close()
+        y = re.sub("includegraphics\{([^\}]+)\}", 
+                   r"includegraphics{\1.eps}", x)
+        wp = open(tex2, "wb")
+        wp.write(y)
+        wp.close()
+        os.rename(tex2, tex)
+
+    def _write_graph_attr(self, wp, ga):
+        if ga.terminal != "":
+            wp.write('set terminal %s\n' % ga.terminal)
+        if ga.output != "":
+            wp.write('set output "%s"\n'   % self._ext_name(ga.output, ga))
+        if ga.graph_title is not None:
+            wp.write('set title "%s"\n'    % ga.graph_title)
+        if ga.xrange != "":
+            wp.write('set xrange %s\n'   % ga.xrange)
+        if ga.yrange != "":
+            wp.write('set yrange %s\n'   % ga.yrange)
+        if ga.xlabel != "":
+            wp.write('set xlabel "%s"\n'   % ga.xlabel)
+        if ga.ylabel != "":
+            wp.write('set ylabel "%s"\n'   % ga.ylabel)
+        if ga.boxwidth != "":
+            wp.write('set boxwidth %s\n'   % ga.boxwidth)
+        if ga.graph_attr != "":
+            wp.write('%s\n'                % ga.graph_attr)
+
+    def _open_sql(self, database, init_statements, init_file, 
+                  functions, aggregates, collations):
         """
         database    : string : filename of an sqlite3 database 
         init_statements : string : sql statement(s) to run
@@ -64,35 +558,47 @@ class smart_gnuplotter:
             co.executescript(script)
         return co
 
-    def __parse_query_expr(self, expr):
-        """
-        expr : a tuple of 2-7 elements
-        supply defaults for missing elements and always
-        return a 7-elements tuple
-        database,query,init_statements,init_file,functions,aggregates,collations
-        """
-        database = expr[0]
-        query = expr[1]
-        init_statements = ""
-        init_file = ""
-        functions = []
-        aggregates = []
-        collations = []
-        if len(expr) > 2:
-            init_statements = expr[2]
-        if len(expr) > 3:
-            init_file = expr[3]
-        if len(expr) > 4:
-            functions = expr[4]
-        if len(expr) > 5:
-            aggregates = expr[5]
-        if len(expr) > 6:
-            collations = expr[6]
-        return database,query,init_statements,init_file,functions,aggregates,collations
-        
+    def _do_sql_ex(self, database, query, init_statements, init_file,
+                   functions, aggregates, collations, 
+                   single_row, single_col):
+        if _dbg>=3:
+            _Es("   do_sql_ex(database=%s,query=%s,init_statements=%s,init_file=%s,functions=%s,aggregates=%s,collations=%s,single_row=%s,single_col=%s)\n" 
+               % (database, query, init_statements, init_file, 
+                  functions, aggregates, collations, single_row, single_col))
+        co = self._open_sql(database, init_statements, init_file, 
+                            functions, aggregates, collations)
+        if single_row and single_col:
+            for (result,) in co.execute(query):
+                break
+        elif single_row and single_col == 0:
+            for result in co.execute(query):
+                break
+        elif single_row == 0 and single_col:
+            result = []
+            for (x,) in co.execute(query):
+                result.append(x)
+        else:
+            assert(single_row == 0)
+            assert(single_col == 0)
+            result = []
+            for x in co.execute(query):
+                result.append(x)
+        co.close()
+        return result
+
+    def _do_sql_noex(self, database, query, init_statements, init_file,
+                     functions, aggregates, collations, 
+                     single_row, single_col):
+        try:
+            return self._do_sql_ex(database, query, init_statements, init_file,
+                                   functions, aggregates, collations, 
+                                   single_row, single_col)
+        except sqlite3.OperationalError,e:
+            _Es("error during sql query %s\n" % e.args[0])
+            return None
 
     def do_sql(self, database, query, init_statements="", init_file="",
-               functions=None, aggregates=None, collations=None, 
+               functions=[], aggregates=[], collations=[], 
                single_row=0, single_col=0):
         """
         database    : string : filename of an sqlite3 database 
@@ -123,584 +629,336 @@ class smart_gnuplotter:
           and each element of the list becomes that column
           instead of a singleton tuple.
         """
-        if dbg>=3:
-            self.__Es("   do_sql(database=%s,query=%s,init_statements=%s,init_file=%s,functions=%s,aggregates=%s,collations=%s,single_row=%s,single_col=%s)\n" 
-               % (database, query, init_statements, init_file, 
-                  functions, aggregates, collations, single_row, single_col))
-        co = self.__open_sql(database, init_statements, init_file, 
-                             functions, aggregates, collations)
-        if single_row and single_col:
-            for (result,) in co.execute(query):
-                break
-        elif single_row and single_col == 0:
-            for result in co.execute(query):
-                break
-        elif single_row == 0 and single_col:
-            result = []
-            for (x,) in co.execute(query):
-                result.append(x)
-        elif single_row == 0 and single_col == 0:
-            result = []
-            for x in co.execute(query):
-                result.append(x)
+        return self._do_sql_noex(database, query, init_statements, init_file,
+                                 functions, aggregates, collations, 
+                                 single_row, single_col)
+
+    def _prompt(self, ga):
+        _Es("[s/q/<num>/other]? ")
+        line = sys.stdin.readline().strip()
+        _Es("\n")
+        if line[0:1] == "s":
+            ga.pause = self.graph_attr.pause = self.default_pause = 0
+        elif line[0:1] == "q":
+            _Es("quit\n")
+            self.quit = 1
         else:
-            assert 0, (single_row, single_col)
-        co.close()
-        return result
-
-    def __write_graph_attr(self, terminal, output, attr, gpl):
-        """
-        terminal : None or string : specifies gnuplot terminal
-        output   : None or string : specifies gnuplot output filename
-        attr     : string : specifies graph attributes 
-        graph_binding : string : specifies graph attributes 
-        gpl      : gnuplot filename
-        """
-        wp = open(gpl, "wb")
-        if terminal is not None: 
-            wp.write('set terminal %s\n' % terminal)
-        if output is not None: 
-            wp.write('set output "%s"\n' % output)
-        wp.write("%s\n" % attr)
-        self.args = []
-        return wp
-
-    def __run_gnuplot(self, filename):
-        """
-        run gnuplot filename
-        and return the status
-        """
-        cmd = "gnuplot %s" % filename
-        if dbg>=1: self.__Es("%s\n" % cmd)
-        return os.system(cmd)
-
-    def __remove(self, filename):
-        if dbg>=1:
-            self.__Es("remove %s\n" % filename)
-        os.remove(filename)
-
-    def __safe_int(self, line):
-        try:
-            return int(line)
-        except ValueError:
-            return None
-
-    def __get_terminal_type(self, terminal):
-        """
-        terminal : string : specifies thee full gnuplot terminal string,
-         such as "epslatex size 10cm,5cm"
-
-        extract the 'type' from the terminal spec ("epslatex" from
-        "epslatex size 10cm,5cm"
-        """
-        return terminal.split()[0].lower()
-
-    def __is_epslatex(self, terminal):
-        if terminal is None: return 0
-        if self.__get_terminal_type(terminal) == "epslatex":
-            return 1
-        else:
-            return 0
-
-    def __is_display(self, terminal):
-        if terminal is None: return 1
-        t = self.__get_terminal_type(terminal)
-        if t == "wxt" or t == "x11" or t == "xterm":
-            return 1
-        else:
-            return 0
-
-    def __prompt(self, terminal, pause):
-        """
-        terminal : string : specifies ther terminal of the last
-                   invocation of guplot
-        pause    : integer : specifies how much the last 
-                   invocation of guplot paused
-
-        if the last gnuplot terminal is a display (wxt, x11, xterm)
-        and the gnuplot waits for the key input (pause < 0), 
-        then it asks what to do in similar situations later.
-        's' : we never 'pause' gnuplot
-        'q' : quit immeidately
-        number : let gnuplot pause the specified number of seconds 
-        """
-        if self.__is_display(terminal) and pause < 0:
-            self.__Es("'s' to suppress future prompts, 'q' to quit now, "
-               "a <number> to set pause to it, "
-               "or else to continue [s/q/<number>/other]? ")
-            line = sys.stdin.readline()
-            self.__Es("\n")
-            if line[0:1] == "q":
-                return 1
-            elif line[0:1] == "s":
-                self.default_pause = 0
+            x = self._safe_int(line)
+            if x is not None:
+                ga.pause = self.graph_attr.pause = self.default_pause = x
             else:
-                x = self.__safe_int(line)
-                if x is not None:
-                    self.default_pause = x
-        return 0
+                # _Es("you hit [%s]\n" % line)
+                pass
+        return self.quit
 
-    def __extend_filename(self, output, terminal):
-        """
-        output : None or string : filename of the output
-        terminal : None or string : gnuplot terminal 
-        attach extention to output, based on terminal.
-        e.g., output="x", terminal="epslatex" -> x.tex
-        """
-        if output is None: return output
-        if terminal is None: return output
-        terminal_type = terminal.split()[0]
-        ext_D = {
-            "epslatex" : ".tex",
-            "latex"    : ".tex",
-            "fig"     : ".tex",
-            "texdraw" : ".tex",
-            "pslatex" : ".tex",
-            "pstex"   : ".tex",
-            "postscript" : ".eps",
-            "jpeg"    : ".jpg",
-            "svg"     : ".svg",
-            "gif"     : ".gif",
-            "png"     : ".png", }
-        ext = ext_D.get(terminal_type, "")
-        return output + ext
-
-    def __fix_include_graphics(self, tex):
-        """
-        tex : string : filename output by epslatex
-        fix the \includegraphics{file} line of the tex file
-        to \includegraphics{file.eps}.  this is necessary
-        to make it possible to load this file with dvipdfm
-        driver
-        """
-        tex2 = "%s.tmp" % tex
-        fp = open(tex, "rb")
-        x = fp.read()
-        fp.close()
-        y = re.sub("includegraphics\{([^\}]+)\}", 
-                   r"includegraphics{\1.eps}", x)
-        wp = open(tex2, "wb")
-        wp.write(y)
+    def _show_graph(self, ga, graph_binding):
+        if _dbg>=3:
+            _Es('  show_graph(graph_binding=%s)\n' % graph_binding)
+        gpl_file,wp = self._open_gpl(ga)
+        self._write_graph_attr(wp, ga)
+        plots = self._expand_plots(graph_binding)
+        if plots is None: return 1 # NG
+        # set xtics ...
+        tics = self._write_plots_tics(wp, plots)
+        # plot expr with ..., expr with ..., ...
+        self._write_plots_exprs(wp, ga, plots)
+        self._write_plots_data(wp, plots, tics)
+        self._write_pause(wp, ga)
         wp.close()
-        os.rename(tex2, tex)
-
-    def __x_is_symbol(self, data):
-        for row in data:
-            try:
-                float(row[0])
-            except:
-                return 1
-        return 0
-            
-    def __mk_x_idx(self, data):
-        D = {}
-        for i,row in enumerate(data):
-            x = row[0]
-            D[x] = i
-        return D
-
-    def __write_tics(self, wp, plots):
-        """
-        plots : list of (expression, string, list of tuples)
-        expression is either string, list, or uple specifying what to plot
-
-        examine whether the x-axis of the data is symbolic, and if so,
-        it generates an appropriate 
-        set xtics (...) 
-        line in the gnuplot command file
-        """
-        if dbg>=3:
-            self.__Es("   write_tics(plots=%s)\n" % plots)
-        A = []
-        for expr,attr,bindings in plots:
-            for bind in bindings:
-                data = None
-                if type(expr) is types.ListType:
-                    data = expr
-                elif type(expr) is types.TupleType:
-                    X = self.__parse_query_expr(expr)
-                    database,query,init_statements,init_file,functions,aggregates,collations = X
-                    data = self.do_sql((database % bind), (query % bind),
-                                       (init_statements % bind), (init_file % bind),
-                                       functions, aggregates, collations)
-                if data is not None:
-                    if self.__x_is_symbol(data):
-                        for i,row in enumerate(data):
-                            A.append('"%s" %d' % (row[0], i))
-        if len(A) > 0:
-            wp.write('set xtics (%s)\n' % ",".join(A))
-
-
-    def __write_plots_canonical(self, wp, plot, plots):
-        """
-        plots : list of (expr_template, attr_template, bindings)
-
-        (1) expr_template specifies what to plot. it may be:
-        - a string (e.g., 'x', '"a.dat"')
-        - a python list of two numbers (e.g., [(1,2),(2,4),(3,9)])
-        - tuple of database filename, and an SQL query 
-          (e.g., ("a.db", "select x,y from t"))
-        
-        each may contain a placeholder, like %(a)s which is substituted
-        by bindings argument
-
-        (2) attr_template is a string specifying attributes of the plot.
-        in short, it come after 'plot xxx' 
-
-        (3) bindings is a list of dictionaries. each element of the list
-        (a dictionary) must supply values of placeholders.
-
-        given these parameters, it writes an appropriate 'plot' command
-        of gnuplot to write all plots obtained by instantiating 
-        expr_template and attr_template, by bindings.
-        e.g., 
-
-        plots = [ ('%(a)s * x', 'title "%(a)x"', [ {"a":1}, {"a":2} ]),
-                   ('%(b)s / x', 'title "x/%(b)"', [ {"b":3}, {"b":4} ]) ]
-        will generate:
-         plot 1*x title "1x", 2*x title "2x", 3/x title "3/x", 4/x title "4/x"
-
-        """
-        if dbg>=3:
-            self.__Es("  write_plots_canonical(%s)\n" % plots)
-        wp.write("%s " % plot)
-        C = []
-        for i,(expr,attr,bindings) in enumerate(plots):
-            for bind in bindings:
-                if type(expr) is types.ListType:
-                    # list of data
-                    c = "'-'"
-                elif type(expr) is types.TupleType:
-                    # (database,query)
-                    c = "'-'"
-                else:
-                    assert(type(expr) is types.StringType), expr
-                    c = expr % bind
-                C.append("%s %s" % (c, (attr % bind)))
-        wp.write("%s\n" % ", ".join(C))
-        for expr,attr,bindings in plots:
-            for bind in bindings:
-                data = None
-                if type(expr) is types.ListType:
-                    data = expr
-                elif type(expr) is types.TupleType:
-                    X = self.__parse_query_expr(expr)
-                    db,qu,init_stmts,init_file,funcs,aggrs,colls = X
-                    data = self.do_sql((db % bind), (qu % bind),
-                                       (init_stmts % bind), (init_file % bind),
-                                       funcs, aggrs, colls)
-                # query or python list. generate data in place followed by 'e'
-                if data is not None:
-                    if self.__x_is_symbol(data):
-                        # if x-axis is symbolic, translate each data
-                        # into its index
-                        idx = self.__mk_x_idx(data)
-                        for row in data:
-                            x = row[0]
-                            fmt = " ".join([ "%s" ] * len(row)) + "\n"
-                            wp.write(fmt % ((idx[x],) + row[1:]))
-                    else:
-                        for row in data:
-                            fmt = " ".join([ "%s" ] * len(row)) + "\n"
-                            wp.write(fmt % row)
-                    wp.write("e\n")
-
-    def __show_graph(self, wp, plot, terminal, output, pause, gpl, remove):
-        """
-        terminal : None or string : specifies gnuplot terminal
-        output : None or string : specifies gnuplot output filename
-        pause : integer : specifies how much to pause gnuplot after 
-                   showing graph
-        gpl : filename to write gnuplot command to 
-        remove : 0/1 : 1 if gpl should be removed after gnuplot 
-        """
-        if dbg>=3:
-            self.__Es("  show_graph(terminal=%s,output=%s,pause=%s,gpl=%s,remove=%s)\n"
-               % (terminal, output, pause, gpl, remove))
-        self.__write_tics(wp, self.args)
-        self.__write_plots_canonical(wp, plot, self.args)
-        if self.__is_display(terminal):
-            if pause is None: pause = self.default_pause
-            wp.write("pause %d\n" % pause)
-        wp.close()
-        r = self.__run_gnuplot(gpl)
-        if r == 0:
-            r = self.__prompt(terminal, pause)
-            if remove: 
-                self.__remove(gpl)
-            else:
-                self.__Es("gnuplot file '%s' is left for your inspection\n" 
-                          % gpl)
-            if self.__is_epslatex(terminal):
-                self.__fix_include_graphics(output)
+        r = self._run_gnuplot(gpl_file)
+        if ga._is_epslatex():
+            output = self._ext_name(ga.output, ga)
+            self._fix_include_graphics(output)
+        if ga._is_display() and ga.pause < 0:
+            self._prompt(ga)
+        if r:
+            _Es("there was an error in gnuplot, file '%s' "
+               "left for your inspection\n" % gpl_file)
         else:
-            self.__Es("error: gnuplot command failed with %d, file '%s' is "
-               "left for your inspection\n" % (r, gpl))
-        return r
-        
-    def __expand_vars_rec(self, K, V, A):
-        """
-        K : a dictionary containing variables to expand
-        V : a dictionary containing variables that have been bound
-        A : a list to accumulate all bindings
-        """
-        if len(K) == 0:
-            A.append(V.copy())
-        else:
-            k,vals = K.popitem()
-            for v in vals:
-                assert (k not in V), (k, V)
-                V[k] = v
-                self.__expand_vars_rec(K, V, A)
-                del V[k]
-            K[k] = vals
-        return A
-
-    def __expand_vars(self, K):
-        """
-        e.g., 
-        expand_vars({ "a" : [1,2], "b" : [3,4] })
-
-        ==> [ { "a" : 1, "b" : 3 },
-              { "a" : 1, "b" : 4 },
-              { "a" : 2, "b" : 3 },
-              { "a" : 2, "b" : 4 } ]
-
-        """
-        R = []
-        for D in self.__expand_vars_rec(K, {}, []):
-            E = D.copy()
-            for k,v in D.items():
-                # when the value is a tuple (e.g., "x" : (3, 4)),
-                # register "x[0]" : 3 and "x[1]" : 4 as well
-                if type(v) is types.TupleType:
-                    for i in range(len(v)):
-                        ki = "%s[%d]" % (k, i)
-                        vi = v[i]
-                        E[ki] = vi
-            R.append(E)
-        return R
-
-    def __add_plots(self, expr, plot_attr, variables, graph_binding):
-        """
-        expr : string, list, tuple : specifies what to plot. 
-               may contain placeholders
-        plot_attr : string : specifies the attribute of the plot.
-                     may contain placeholders
-        variables : a dictionary each entry of which specifies a variable
-                    and its possible values 
-                    (e.g., { "a" : [1,2,3], "b" : [4,5,6] })
-
-        add plots for all combinations of variables, so it 
-        will be written when show_graph method is called
-        """
-        if dbg>=3:
-            self.__Es("  add_plots(expr=%s,plot_attr=%s,variables=%s,graph_binding=%s)\n" 
-               % (expr, plot_attr, variables, graph_binding))
-        plot_bindings = self.__expand_vars(variables)
-        # merge graph binding and plot_binding
-        for plot_binding in plot_bindings:
-            plot_binding.update(graph_binding)
-        self.args.append((expr, plot_attr, plot_bindings))
-
-    def __add_many_plots(self, plots, graph_binding):
-        """
-        plots : list of (expr, plot_attr, variables)
-        see add_plots for the types of each field
-        """
-        for expr,plot_attr,variables in plots:
-            self.__add_plots(expr, plot_attr, variables, graph_binding)
-
-    def __graph_canonical(self, plot, terminal, output, 
-                          graph_attr, graph_binding, 
-                          plots, pause, gpl_file, save_gpl):
-        """
-        terminal : string or None : specifies gnuplot terminal
-        output : string or None : specifies gnuplot output
-        graph_attr : string : specifies graph attribute template
-        graph_binding : dictionary : specifies binding to substitute 
-                        graph_attr
-        plots : list of plot specs :
-        pause : 
-        gpl_file : 
-        write a single graph (may contain many plots).
-        plots : see add_many_plots for its type
-        graph_attr : a string passed to gnuplot prior to plot
-        """
-        if dbg>=3:
-            self.__Es(" graph_canonical(graph_attr=%s,graph_binding=%s,plots=%s)\n" 
-               % (graph_attr, graph_binding, plots))
-        if gpl_file is None:
-            if save_gpl:
-                remove = 0
-            else:
-                remove = 1
-            gpl_file = "tmp_%d.gpl" % self.gpl_file_counter
-            self.gpl_file_counter = self.gpl_file_counter + 1
-        else:
-            remove = 0
-        wp = self.__write_graph_attr(terminal, output, graph_attr, gpl_file)
-        self.__add_many_plots(plots, graph_binding)
-        r = self.__show_graph(wp, plot, terminal, output, pause, gpl_file, remove)
+            self._cleanup_gpl(ga, gpl_file)
         return r
 
-    def __graphs_canonical(self, plot, terminal_template, output_template, 
-                           graph_attr_template, graph_variables, 
-                           pause, plots, gpl_file_template, leave_gpl):
-        if dbg>=3:
-            self.__Es("graphs_canonical(graph_attr_template=%s,graph_variables=%s,plots=%s)\n" % 
-               (graph_attr_template, graph_variables, plots))
-        graph_bindings = self.__expand_vars(graph_variables)
-        if dbg>=3:
-            self.__Es(" graph_bindings=%s\n" % graph_bindings)
-        for graph_binding in graph_bindings:
-            graph_attr = graph_attr_template % graph_binding
-            # instantiate template
-            if terminal_template is None:
-                terminal = None
-            else:
-                terminal = terminal_template % graph_binding
-            if output_template is None:
-                if dbg>=3:
-                    self.__Es("  output_template=%s, graph_variables=%s\n"
-                       % (output_template, graph_variables))
-                if self.__is_display(terminal):
-                    template = None
-                else:
-                    keys = [ ("_%%(%s)s" % x) for x in graph_variables.keys() ]
-                    template = "out%s" % "".join(keys)
-                    if dbg>=3:
-                        self.__Es("   output_template->%s, graph_binding=%s\n" 
-                           % (new_template, graph_binding))
-            else:
-                template = output_template
-            if template is None:
-                output = None
-            else:
-                output = template % graph_binding
-                output = self.__extend_filename(output, terminal)
-            if gpl_file_template is None:
-                gpl_file = None
-            else:
-                gpl_file = gpl_file_template % graph_binding
-            r = self.__graph_canonical(plot, terminal, output, graph_attr, 
-                                       graph_binding, plots, pause, gpl_file,
-                                       leave_gpl)
-            if r: return r      # NG
-        return 0                # OK
-
-    def graphs(self, expr_template, 
-               plot="plot", 
-               terminal=None,
-               output=None,
-               graph_title=None,
-               xrange=None,
-               yrange=None,
-               xlabel=None,
-               ylabel=None,
-               boxwidth=None,
-               graph_attr="",   # attribute of the graph
-               graph_vars=None, # variables in graph_attr
-               pause=None,
-               plot_title=None,
-               plot_with=None,
-               using=None,
-               plot_attr="",   # attribute of each plot
-               overlays=None, 
-               gpl_file=None,
-               leave_gpl=0,
-               **variables):
-        """
-        expr_template : string, python list, or tuple :
-          specifies what to plot (see below)
-        plot : "plot" or "splot"
-        terminal : None or string :
-          specifies terminal used (e.g., epslatex size 10cm,5cm)
-        output : None or string : 
-          specifies output filename or its prefix
-        graph_title : None or string : 
-          specifies the graph title
-        xrange : None or string : 
-          specifies xrange (e.g., "[0:]")
-        yrange : None or string : 
-          specifies yrange (e.g., "[0:]")
-        boxwidth : None or string : 
-          set boxwidth, effective only when you use boxes
-        graph_attr : string : 
-          specifies any string that comes before plot command
-        graph_vars : list of strings : 
-          specifies which variable to use to generate
-        plot_title : None or string :
-          specifies plot title
-        plot_with : None or string :
-          specifies style to plot plots (e.g., "boxes", "lines")
-        using : None or string :
-          specifies columns to plot plots (e.g., "2", "1:2")
-        plot_attr : None or string :
-          specifies any attribute of plots 
-        overlays : list of (expression, modifier) 
-          specifies plots to overlay
-        leave_gpl : 0/1
-          if 1, it leaves the gnuplot file for your inspection
-        gpl_file : None or string :
-          specifies the filename of (temporary) files to write
-          gnuplot commands to; implies leave_gpl = 1
-        """
-        if terminal is None: terminal = self.default_terminal
-        if output is None: output = self.default_output
-        if graph_title is not None: 
-            graph_attr = 'set title "%s"\n%s' % (graph_title, graph_attr)
-        if xrange is not None: 
-            graph_attr = 'set xrange %s\n%s' % (xrange, graph_attr)
-        if yrange is not None: 
-            graph_attr = 'set yrange %s\n%s' % (yrange, graph_attr)
-        if xlabel is not None: 
-            graph_attr = 'set xlabel "%s"\n%s' % (xlabel, graph_attr)
-        if ylabel is not None: 
-            graph_attr = 'set ylabel "%s"\n%s' % (ylabel, graph_attr)
-        if boxwidth is not None: 
-            graph_attr = 'set boxwidth %s\n%s' % (boxwidth, graph_attr)
-        if graph_vars is None: graph_vars = []
-        if plot_title is not None:
-            plot_attr = 'title "%s" %s' % (plot_title, plot_attr)
-        if plot_with is not None:
-            plot_attr = 'with %s %s' % (plot_with, plot_attr)
-        if using is not None:
-            plot_attr = 'using %s %s' % (using, plot_attr)
-        if overlays is None: overlays = []
+    def _separate_variables(self, kw, graph_vars):
+        if _dbg>=3:
+            _Es(' separate_variables(graph_vars=%s)' % graph_vars)
+            _Es(' kw:\n')
+            self._show_kw(kw, 2)
+        plot_variables = kw.copy()
         graph_variables = {}
-        plot_variables = {}
-        for v,vals in variables.items():
-            if v in graph_vars:
-                graph_variables[v] = vals
-            else:
-                plot_variables[v] = vals
-        plots = [ (expr_template, plot_attr, plot_variables) ]
-        for expr,mod in overlays:
-            plots.append((expr, mod, {}))
-        r = self.__graphs_canonical(plot, terminal, output, graph_attr, 
-                                    graph_variables, pause, plots, gpl_file,
-                                    leave_gpl)
-        if r != 0 and self.exit_on_error:
-            if os.WIFEXITED(r):
-                sys.exit(os.WEXITSTATUS(r))
-            else:
+        ga = graph_attributes({}, self)
+        for k in ga.__dict__.keys():
+            if k in plot_variables:
+                graph_variables[k] = plot_variables.pop(k)
+        for k in graph_vars:
+            if k in plot_variables:
+                graph_variables[k] = plot_variables.pop(k)
+        return graph_variables,plot_variables
+
+    def set_graph_attrs(self, **kw):
+        """
+        This method sets the attribute of the graphs that will
+        be drawn by the next call to show_graphs().  For example,
+
+        g = smart_gnuplotter()
+        g.set_graph_attrs(graph_title="my graph", xrange="[-2:2]")
+        g.add_plots(...)
+        g.show_graphs()
+
+        will generate a graph whose title is "my graph" and xrange
+        is [-2:2].  As you might have imagined, most attributes are
+        simply translated into a corresponding gnuplot 'set' command.
+
+        These attributes may be parameterized; in other words, they 
+        may contain placeholders such as %(a)s, %(b)s, etc., in which
+        case you also need to supply possible values for them.
+        The following is a valid parameterization.
+
+        g.set_graph_attrs(graph_title="graph (a=%(a)s)", a=[1,2,3])
+
+        This will generate three graphs (one for a=1, another for a=2,
+        and the other for a=3).  The title of each of the three graphs
+        will be "graph (a=1)", "graph (a=2)", and "graph (a=3)",
+        respectively.
+
+        The following is the attributes direcly supported by keyword
+        arguments and their meanings. Most of them have obvious 
+        counterpart in gnuplot's 'set' command
+
+        terminal    : terminal specification
+                      (e.g., "png", "postscript", "epslatex color size 10cm,4cm")
+        output      : output filename
+        graph_title : title of the graph
+        xrange      : xrange of the graph
+        yrange      : yrange of the graph
+        xlabel      : xlabel of the graph
+        ylabel      : ylabel of the graph
+        boxwidth    : boxwidth, meaningful only when you use boxes style for plots
+        pause       : pause after you show a graph on display. meaningful only when
+                      the terminal is a display ("wxt", "x11", or "xterm")
+        plot        : either "plot" or "splot", depending on you perfom 2d plot or
+                      3d plot
+        save_gpl    : 0 or 1. if 1, a temporary file to which gnuplot commands are
+                      written will not be deleted. useful for diagnosis.
+        gpl_file    : name of the temporary filename to which gnuplot commands are
+                      written. if specified, it implies save_gpl=1
+
+        To set other attributes supported by gnuplot, you may use parameter 
+        'graph_attr'
+                      
+        graph_attr  : any string that is given to gnuplot before the plot command
+                      is issued. you may write any valid gnuplot command.
+
+        Automatic extension of the output: for typical terminal types,
+        the filename you give to the output parameter is automatically
+        extended with a proper extension.  For example, if you say output="foo"
+        and terminal="postscript", you actually get foo.eps.
+        It is particularly convenient when you switch from one terminal 
+        to another; you normally do not have to change output parameter.
+        Currently, the following is the list of terminal types and their
+        associated extensions (I may have gotten some of them wrong; corrections
+        are welcome).
+
+            epslatex : .tex
+            latex    : .tex
+            fig      : .tex
+            texdraw  : .tex
+            pslatex  : .tex
+            pstex    : .tex
+            postscript : .eps
+            jpeg     : .jpg
+            svg      : .svg
+            gif      : .gif
+            png      : .png
+
+        """
+        if _dbg>=3:
+            _Es(' set_graph_attrs\n')
+            self._show_kw(kw, 2)
+        if self.quit: 
+            _Es(' quit (self.quit == 1)\n')
+            return self.quit
+        self.graph_attr = graph_attributes(kw, self)
+        self.plots = []
+
+    def add_plots(self, expr, **kw):
+        """
+        expr : an expression to plot.  see below for accepted values
+
+        This method lets expr to be drawn in each of the graphs 
+        generated when you call show_graphs() next time.  For example,
+
+        g = smart_gnuplotter()
+        g.set_graph_attrs()
+        g.add_plots("sin(x)")
+        g.show_graphs()
+
+        will plot sin(x).
+
+        You may set various attributes of the plot.  For example,
+
+        g.add_plots("sin(x)", plot_title="sin")
+
+        will set the title of the plot to "sin".
+
+        Expression, as well as the attributes, may be parameterized
+        (may contain placeholders such as %(a)s, %(param)s, and so on),
+        in which case you need to supply the values of these parameters.
+
+        For example,
+
+        g.add_plots("sin(%(a)s * x)", plot_title="sin(%(a)sx)",
+                    a=[1,2,3])
+
+        will plot sin(1*x), sin(2*x), and sin(3*x) in a single graph
+        when you call show_graphs() next time.  The title of each of
+        them will be sin(1x), sin(2x), and sin(3x), respectively.
+
+        The following is the attributes direcly supported by keyword
+        arguments and their meanings. 
+
+        plot_title : title of the plot
+        using      : columns to plot in datafile. you may give
+                     any string you may specify after 'using'
+                     in a plot.
+        plot_with  : plot style. you may give any string you may 
+                     specify after the 'with' in a plot.
+
+        Besides, you may specify any string you may specify to modify
+        your plot by 'plot_attr' parameter.
+
+        plot_attr  : any string you may specify for a plot.
+
+        Possible values for expr parameter:
+
+        (1) a python string : this is simply passed to gnuplot's plot
+        command.  Gnuplot regularly interprets it as either an expression 
+        (e.g., sin(x)), a datafile (e.g., "data.txt"), or a command by gnuplot 
+        (e.g., "> grep ....").
+
+        (2) a python list of tuples : this is passed to gnuplot's plot
+        command as in-place data.  For example, if you give a list
+        [ (1,2), (3,4) ], then it will be translated into:
+
+             plot '-'
+             1 2 
+             3 4
+             e
+
+        (3) a python tuple : this is interpreted as a sqlite3 query.
+        specifically, it is a tuple of
+        (database, query, init_stataments, init_file, functions, aggregates, collations),
+        where everything other than database and query are optional.
+
+        smart_gnuplotter connects to database, add user-defined
+        functions/aggregates/collations as specified, execute SQL
+        statements init_statements and those in init_file, and finally
+        issue the query.  The result is extracted as a list of tuples
+        and the rest of the process is the same as (2).
+
+        An example: 
+        g.add_plots(("a.sqlite", "select a,b from T"))
+        g.add_plots(("a.sqlite", 
+                     "select a,b from J", "create temp table J as select * from T natural join S"))
+        g.add_plots(("a.sqlite", 
+                     "select a,b from J", "create temp table J as select * from T natural join S",
+                     "init.sql"))
+        g.add_plots(("a.sqlite", 
+                     "select a,b from J", "create temp table J as select * from T natural join S",
+                     "init.sql"))
+
+        functions, aggregates, and collations are lists.  
+        - Each element of functions is a triple (name, arity, python_function)
+        which is translated into a call create_function(name, arity, python_function)
+        on the sqlite3 connection object.
+        - Each element of aggregates is a triple (name, arity, python_class)
+        which is translated into a call create_aggregate(name, arity, python_class)
+        - Each element of collations is a pair (name, python_function)
+        which is translated into a call create_collation(name, python_function).
+        see the documentation of python sqltie3 module.
+
+        """
+        if _dbg>=3:
+            _Es(' add_plots("%s")\n' % str(expr))
+            self._show_kw(kw, 2)
+        if self.quit: 
+            _Es(' quit (self.quit == 1)\n')
+            return self.quit
+        self.plots.append(plots_spec(expr, kw, self))
+
+    def show_graphs(self):
+        """
+        show in display or generate files of the graphs, specified by
+        prior calls to set_graph_attrs and add_plots.
+        """
+        if _dbg>=3:
+            _Es(' show_graphs()\n')
+        if self.quit: 
+            _Es(' quit (self.quit == 1)\n')
+            return self.quit
+        graph_bindings = self._expand_vars(self.graph_attr.variables)
+        self.graph_attr._canonicalize(self)
+        for graph_binding in graph_bindings:
+            ga = self.graph_attr._instantiate(graph_binding, self)
+            if ga is None: return 1 # NG
+            r = self._show_graph(ga, graph_binding)
+            if r: 
+                _Es("abort\n")
+                return r
+            if self.quit: 
+                _Es("quit\n")
                 sys.exit(1)
-        else:
-            return r
+                return r
+        return 0
 
+    def graphs(self, expr, graph_vars=[], overlays=[], **kw):
+        """
+        show graphs, with specified graph attributes as well
+        as plot attributes.  In summary, 
 
-# -------------------------
+          g.graphs(expr, ...)
+  
+        is a shortcut for:
+
+          g.set_graph_attr(...)
+          g.add_plots(expr, ...)
+          g.show_graphs()
+
+        You may give to graphs all parameters accepted by
+        set_graph_attrs or add_plots.  Parameters accepted by
+        set_graph_attrs and paramters specified in the 'graph_vars'
+        are given to set_graph_attr. Other parameters are given to
+        add_plots.  See the documentation of the above two
+        methods for details.
+
+        """
+        if _dbg>=3:
+            _Es('graphs("%s", graph_vars=%s, overlays=%s)\n' 
+               % (expr, graph_vars, overlays))
+            self._show_kw(kw, 1)
+        if self.quit: 
+            _Es(' quit (self.quit == 1)\n')
+            return self.quit
+        g_variables,p_variables = self._separate_variables(kw, graph_vars)
+        if _dbg>=3:
+            _Es(' graph_variables:\n')
+            self._show_kw(g_variables, 2)
+            _Es(' plot_variables:\n')
+            self._show_kw(p_variables, 2)
+        self.set_graph_attrs(**g_variables)
+        self.add_plots(expr, **p_variables)
+        for o_expr,o_opts in overlays:
+            self.add_plots(o_expr, **o_opts)
+        return self.show_graphs()
 
 class confidence_interval:
 
-    def f(self, t, nu):
+    def _f(self, t, nu):
         A = math.gamma((nu + 1) * 0.5)
         B = math.sqrt(nu * math.pi) * math.gamma(nu * 0.5)
         C = math.pow(1 + t * t / nu, -(nu + 1) * 0.5)
         return (A * C) / B 
 
-    def rk_step(self, f, t, dt):
+    def _rk_step(self, f, t, dt):
         k1 = f(t)
         k2 = f(t + dt * 0.5)
         k3 = f(t + dt * 0.5)
@@ -708,7 +966,7 @@ class confidence_interval:
         dy = dt / 6.0 * (k1 + 2.0*k2 + 2.0*k3 + k4)
         return dy
 
-    def find_x(self, f, a, dt, J):
+    def _find_x(self, f, a, dt, J):
         """
         return x s.t. int_a^x f(t)dt = J
         
@@ -717,16 +975,16 @@ class confidence_interval:
         t = a
         I = 0.0
         while 1:
-            dI = self.rk_step(f, t, dt)
+            dI = self._rk_step(f, t, dt)
             if I + dI < J:
                 I += dI
                 t += dt
             elif dt < 1.0E-6:
                 return t
             else:
-                return self.find_x(f, t, dt * 0.1, J - I)
+                return self._find_x(f, t, dt * 0.1, J - I)
 
-    def t_table(self, freedom, significance_level):
+    def _t_table(self, freedom, significance_level):
         """
         freedom : int 
         significance_level : float : 0.05, 0.01, etc.
@@ -734,12 +992,12 @@ class confidence_interval:
         find a such that 
         int_{-a}^a f(t, freedom) dt = 1 - significance_level
         """
-        g = lambda t: self.f(t, freedom)
-        return self.find_x(g, 0.0, 0.01, (1 - significance_level) * 0.5)
+        g = lambda t: self._f(t, freedom)
+        return self._find_x(g, 0.0, 0.01, (1 - significance_level) * 0.5)
 
-    def confidence_interval(self, X, significance_level):
+    def _confidence_interval(self, X, significance_level):
         """
-        return (mu, dm) s.t.  m \pm dm is the confidence interval
+        return (mu, dm) s.t.  m +/- dm is the confidence interval
         of the average of probability density from which X was drawn,
         with the specified significance level 
         """
@@ -748,7 +1006,7 @@ class confidence_interval:
         mu = sum(X) / float(n)
         # unbiased variance
         U = sum([ (x - mu) * (x - mu) for x in X ]) / float(n - 1)
-        t = self.t_table(n - 1, significance_level)
+        t = self._t_table(n - 1, significance_level)
         dm = t * U / math.sqrt(n)
         return (mu, dm)
 
@@ -762,40 +1020,25 @@ class confidence_interval:
 
     def finalize(self):
         try:
-            return self.finalize_()
-        except Exception,e:
+            return self._finalize_()
+        except Exception:
             #sys.stderr.write("Exception %s\n" % (e.args,))
             traceback.print_exc()
             raise
 
 class cimax(confidence_interval):
-    def finalize_(self):
-        mu,dm = self.confidence_interval(self.X, self.significance_level)
+    def _finalize_(self):
+        mu,dm = self._confidence_interval(self.X, self.significance_level)
         return mu + dm
 
 class cimin(confidence_interval):
-    def finalize_(self):
-        mu,dm = self.confidence_interval(self.X, self.significance_level)
+    def _finalize_(self):
+        mu,dm = self._confidence_interval(self.X, self.significance_level)
         return mu - dm
 
-def __main():
-    co = sqlite3.connect(":memory:")
-    co.create_aggregate("cmin", 2, cmin)
-    co.create_aggregate("cmax", 2, cmax)
-    co.execute("create table foo(a, b)")
-    co.execute("insert into foo values(1, 2)")
-    co.execute("insert into foo values(1, 3)")
-    co.execute("insert into foo values(1, 4)")
-    co.execute("insert into foo values(1, 5)")
-    x = co.execute("select cmin(b, 0.05),cmax(b, 0.05) from foo")
-    return x.fetchall()
-
-
-def __main():
+def _main():
     g = smart_gnuplotter()
-    g.graphs("sin(%(a)s * x) + %(b)s", 
-             plot_attr='title "sin(%(a)sx)+%(b)s"',
-             graph_attr='set title "b=%(b)s"',
-             graph_vars=["b"],
-             overlays=[("x",""),("0","")], a=[2,3], b=[1,2])
+    # g.graphs("sin(x)")
+    g.graphs("sin(%(a)s * x)", a=[1,2], save_gpl=1)
+
 
