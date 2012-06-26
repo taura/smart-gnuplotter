@@ -24,7 +24,7 @@ class graph_attributes:
         for k,vals in K.items():
             if type(vals) is not types.ListType:
                 _Es("warning: the value you supplied for graph parameter '%s' is not a list (%s). "
-                   "the parameter '%s' ignored." % (k, vals, k))
+                   "the parameter '%s' ignored.\n" % (k, vals, k))
                 del K[k]
         self.variables = K
 
@@ -110,11 +110,12 @@ class plots_spec:
         self.plot_title = K.pop("plot_title", sg.default_plot_title)
         self.plot_with  = K.pop("plot_with",  sg.default_plot_with)
         self.using      = K.pop("using",      sg.default_using)
-        self.plot_attr  = K.pop("plot_attr", sg.default_plot_attr)
+        self.plot_attr  = K.pop("plot_attr",  sg.default_plot_attr)
+        self.symbolic_x = K.pop("symbolic_x", sg.default_symbolic_x)
         for k,vals in K.items():
             if type(vals) is not types.ListType:
                 _Es("warning: the value you supplied for plot parameter '%s' is not a list (%s). "
-                   "the parameter '%s' ignored." % (k, vals, k))
+                   "the parameter '%s' ignored.\n" % (k, vals, k))
                 del K[k]
         self.variables  = K
 
@@ -280,6 +281,7 @@ class smart_gnuplotter:
         self.default_plot_title = None
         self.default_plot_with = ""
         self.default_using = ""
+        self.default_symbolic_x = 0
         self.default_plot_attr = ""
         # 
         self.default_overlays = []
@@ -391,7 +393,7 @@ class smart_gnuplotter:
         T = {}                  # symbol -> position
         for ps in plots:
             if type(ps.expr) is types.ListType:
-                if self._x_is_symbol(ps.expr):
+                if ps.symbolic_x or self._x_is_symbol(ps.expr):
                     for row in ps.expr:
                         if row[0] not in T:
                             T[row[0]] = len(T)
