@@ -57,8 +57,13 @@ class graph_attributes:
         for k,v in self.__dict__.items():
             if k == "variables":
                 pass
-            elif self._is_string(v):
-                new_v = self._safe_instantiate(k, v, binding)
+            else:
+                if callable(v):
+                    new_v = v(binding)
+                elif self._is_string(v):
+                    new_v = self._safe_instantiate(k, v, binding)
+                else:
+                    new_v = v
                 if new_v is None: return None
                 D[k] = new_v
         for k,v in self.variables.items():
@@ -168,12 +173,17 @@ class plots_spec:
         for k,v in self.__dict__.items():
             if k == "variables" or k == "expr":
                 pass
-            elif self._is_string(v):
-                if _dbg>=4:
-                    _Es('     template = %s)' % v)
-                D[k] = self._safe_instantiate(k, v, all_binding)
             else:
-                D[k] = v
+                if callable(v):
+                    new_v = v(binding)
+                elif self._is_string(v):
+                    if _dbg>=4:
+                        _Es('     template = %s)' % v)
+                    new_v = self._safe_instantiate(k, v, all_binding)
+                else:
+                    new_v = v
+                if new_v is None: return None
+                D[k] = new_v
         for k,v in self.variables.items():
             D[k] = v
         if self._is_string(self.expr):
