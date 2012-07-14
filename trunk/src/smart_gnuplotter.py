@@ -991,7 +991,7 @@ class smart_gnuplotter:
             if ga._is_epslatex():
                 wp.write(r"""
 %%\begin{figure}
-\input{graphs/%(filename)s}
+\input{%(filename)s}
 %%\end{figure}
 """ % { "filename" : ga.output, "caption" : ga.output })
         wp.write(r"""
