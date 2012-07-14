@@ -183,7 +183,7 @@ class plots_spec:
         elif type(self.expr) is types.TupleType:
             # sql query
             i = lambda x: self._safe_instantiate("expr", x, all_binding)
-            sql = tuple(map(i, self.expr))
+            sql = tuple(map(i, self.expr[:4])) + self.expr[4:]
             if sql[0] is None or sql[1] is None: return None
             e = self._expand_sql(sql, sg)
             if e is None: return None
@@ -292,6 +292,7 @@ class smart_gnuplotter:
         self.default_aggregates = [ ("cimin", 2, cimin), ("cimax", 2, cimax) ]
         self.default_collations = []
         self.gpl_file_counter = 0
+        self.all_graphs = []
         self.quit = 0
 
     def _show_kw(self, kw, indent):
@@ -668,6 +669,7 @@ class smart_gnuplotter:
         self._write_pause(wp, ga)
         wp.close()
         r = self._run_gnuplot(gpl_file)
+        self.all_graphs.append(ga)
         if ga._is_epslatex():
             output = self._ext_name(ga.output, ga)
             self._fix_include_graphics(output)
@@ -972,8 +974,35 @@ class smart_gnuplotter:
             self.add_plots(o_expr, **o_opts)
         return self.show_graphs()
 
-class confidence_interval:
+    def generate_tex_file(self, tex_file):
+        wp = open(tex_file, "wb")
+        wp.write(r"""
+\documentclass[12pt,dvipdfm]{article}
+\setlength{\oddsidemargin}{-1.3truecm}
+\setlength{\evensidemargin}{-1.3truecm}
+\setlength{\textwidth}{18.5truecm}
+\setlength{\headsep}{1truecm}
+\setlength{\topmargin}{-2truecm}
+\setlength{\textheight}{25truecm}
+\usepackage{graphicx}
+\begin{document}
+""")
+        for ga in self.all_graphs:
+            if ga._is_epslatex():
+                wp.write(r"""
+%%\begin{figure}
+\input{graphs/%(filename)s}
+%%\end{figure}
+""" % { "filename" : ga.output, "caption" : ga.output })
+        wp.write(r"""
+\end{document}
+""")
+        wp.close()
 
+class confidence_interval:
+    """
+    this class is a base to extend sqlite3 with cimin/cimax aggregates
+    """
     def _f(self, t, nu):
         A = math.gamma((nu + 1) * 0.5)
         B = math.sqrt(nu * math.pi) * math.gamma(nu * 0.5)
