@@ -21,11 +21,17 @@ class graph_attributes:
         self.pause       = K.pop("pause",       sg.default_pause)
         self.gpl_file    = K.pop("gpl_file",    sg.default_gpl_file)
         self.save_gpl    = K.pop("save_gpl",    sg.default_save_gpl)
+        self.variable_order = K.pop("variable_order", [])
         for k,vals in K.items():
             if type(vals) is not types.ListType:
                 _Es("warning: the value you supplied for graph parameter '%s' is not a list (%s). "
                    "the parameter '%s' ignored.\n" % (k, vals, k))
                 del K[k]
+        for k in self.variable_order:
+            if k not in K:
+                _Es("warning: the variable you supplied in variable_order (%s) does not "
+                    "appear in the keyword parameters (%s), ignored\n" % (k, K.keys()))
+                self.variable_order.remove(k)
         self.variables = K
 
     def _is_string(self, x):
@@ -43,15 +49,27 @@ class graph_attributes:
     def _safe_instantiate(self, k, v, binding):
         try:
             return v % binding
-        except KeyError,e:
-            _Es("warning: could not instantiate template '%s' (for %s), "
-               "missing value for '%s' (bindings = %s)\n" 
-               % (v, k, e.args[0], binding))
+        except Exception,e:
+            _Es("warning: instantiating template '%s' for %s with bindings = %s "
+                "caused an exception (%s)\n" 
+                % (v, k, binding, e.args))
             if self._is_critical(k):
                 return None
             else:
                 return v
 
+    def _safe_apply(self, k, f, binding):
+        try:
+            return f(binding)
+        except Exception,e:
+            _Es("warning: applying callable %s (for %s) "
+                "raised an exception %s (bindings = %s)\n" 
+                % (v, k, e.args, binding))
+            if self._is_critical(k):
+                return None
+            else:
+                return v
+        
     def _instantiate(self, binding, sg):
         D = {}
         for k,v in self.__dict__.items():
@@ -59,7 +77,7 @@ class graph_attributes:
                 pass
             else:
                 if callable(v):
-                    new_v = v(binding)
+                    new_v = self._safe_apply(k, v, binding)
                 elif self._is_string(v):
                     new_v = self._safe_instantiate(k, v, binding)
                 else:
@@ -117,12 +135,18 @@ class plots_spec:
         self.using      = K.pop("using",      sg.default_using)
         self.plot_attr  = K.pop("plot_attr",  sg.default_plot_attr)
         self.symbolic_x = K.pop("symbolic_x", sg.default_symbolic_x)
+        self.variable_order = K.pop("variable_order", [])
         for k,vals in K.items():
             if type(vals) is not types.ListType:
                 _Es("warning: the value you supplied for plot parameter '%s' is not a list (%s). "
                    "the parameter '%s' ignored.\n" % (k, vals, k))
                 del K[k]
-        self.variables  = K
+        for k in self.variable_order:
+            if k not in K:
+                _Es("warning: the variable you supplied in variable_order (%s) does not "
+                    "appear in the keyword parameters (%s), ignored\n" % (k, K.keys()))
+                self.variable_order.remove(k)
+        self.variables = K
 
     def _is_string(self, x):
         if type(x) is types.StringType or type(x) is types.UnicodeType:
@@ -139,15 +163,27 @@ class plots_spec:
     def _safe_instantiate(self, k, v, binding):
         try:
             return v % binding
-        except KeyError,e:
-            _Es("warning: could not instantiate template '%s' (for %s), "
-               "missing value for '%s' (bindings = %s)\n" 
-               % (v, k, e.args[0], binding))
+        except Exception,e:
+            _Es("warning: instantiating template '%s' for %s with bindings = %s "
+                "caused an exception (%s)\n" 
+                % (v, k, binding, e.args))
             if self._is_critical(k):
                 return None
             else:
                 return v
 
+    def _safe_apply(self, k, f, binding):
+        try:
+            return f(binding)
+        except Exception,e:
+            _Es("warning: applying callable %s (for %s) "
+                "raised an exception %s (bindings = %s)\n" 
+                % (v, k, e.args, binding))
+            if self._is_critical(k):
+                return None
+            else:
+                return v
+        
     def _expand_sql(self, sql, sg):
         db,query = sql[0],sql[1]
         init_s = ""
@@ -163,6 +199,7 @@ class plots_spec:
         return sg._do_sql_noex(db, query, init_s, init_f, 
                                funcs, aggrs, colls, 0, 0)
     
+
     def _instantiate(self, binding, graph_binding, sg):
         if _dbg>=3:
             _Es('    plots_spec.instantiate(binding=%s, graph_binding=%s)\n'
@@ -175,14 +212,15 @@ class plots_spec:
                 pass
             else:
                 if callable(v):
-                    new_v = v(binding)
+                    new_v = self._safe_apply(k, v, binding)
+                    if new_v is None: return None
                 elif self._is_string(v):
                     if _dbg>=4:
-                        _Es('     template = %s)' % v)
+                        _Es('     template = %s\n' % v)
                     new_v = self._safe_instantiate(k, v, all_binding)
+                    if new_v is None: return None
                 else:
                     new_v = v
-                if new_v is None: return None
                 D[k] = new_v
         for k,v in self.variables.items():
             D[k] = v
@@ -326,26 +364,31 @@ class smart_gnuplotter:
         except ValueError:
             return None
 
-    def _expand_vars_rec(self, K, V, A):
+    def _expand_vars_rec(self, K, V, A, O):
         """
         K : a dictionary containing variables to expand
         V : a dictionary containing variables that have been bound
         A : a list to accumulate all bindings
+        O : list of variables to specify which varialbe to expand first
         """
         if len(K) == 0:
             A.append(V.copy())
         else:
-            k,vals = K.popitem()
+            if len(O) > 0:
+                k = O.pop(0)
+                vals = K.pop(k)
+            else:
+                k,vals = K.popitem()
             assert (type(vals) is types.ListType), (k, vals)
             for v in vals:
                 assert (k not in V), (k, V)
                 V[k] = v
-                self._expand_vars_rec(K, V, A)
+                self._expand_vars_rec(K, V, A, O)
                 del V[k]
             K[k] = vals
         return A
 
-    def _expand_vars(self, K):
+    def _expand_vars(self, K, O):
         """
         e.g., 
         expand_vars({ "a" : [1,2], "b" : [3,4] })
@@ -359,7 +402,7 @@ class smart_gnuplotter:
         if _dbg>=3:
             _Es('    expand_vars(vars=%s)\n' % K)
         R = []
-        for D in self._expand_vars_rec(K, {}, []):
+        for D in self._expand_vars_rec(K, {}, [], O):
             E = D.copy()
             for k,v in D.items():
                 # when the value is a tuple (e.g., "x" : (3, 4)),
@@ -380,7 +423,7 @@ class smart_gnuplotter:
             _Es('   expand_plots(graph_binding=%s)\n' % graph_binding)
         plots = []
         for p in self.plots:
-            bindings = self._expand_vars(p.variables)
+            bindings = self._expand_vars(p.variables, p.variable_order)
             if _dbg>=3:
                 _Es('    -> bindings = %s\n' % bindings)
             for binding in bindings:
@@ -909,7 +952,7 @@ class smart_gnuplotter:
         if self.quit: 
             _Es(' quit (self.quit == 1)\n')
             return self.quit
-        graph_bindings = self._expand_vars(self.graph_attr.variables)
+        graph_bindings = self._expand_vars(self.graph_attr.variables, self.graph_attr.variable_order)
         self.graph_attr._canonicalize(self)
         for graph_binding in graph_bindings:
             ga = self.graph_attr._instantiate(graph_binding, self)
@@ -973,6 +1016,8 @@ class smart_gnuplotter:
             _Es(' quit (self.quit == 1)\n')
             return self.quit
         g_variables,p_variables = self._separate_variables(kw, graph_vars)
+        if "variable_order" not in g_variables:
+            g_variables["variable_order"] = graph_vars
         if _dbg>=3:
             _Es(' graph_variables:\n')
             self._show_kw(g_variables, 2)
@@ -987,7 +1032,7 @@ class smart_gnuplotter:
     def generate_tex_file(self, tex_file):
         wp = open(tex_file, "wb")
         wp.write(r"""
-\documentclass[12pt,dvipdfm]{article}
+\documentclass[8pt,dvipdfm]{article}
 \setlength{\oddsidemargin}{-1.3truecm}
 \setlength{\evensidemargin}{-1.3truecm}
 \setlength{\textwidth}{18.5truecm}
