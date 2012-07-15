@@ -53,6 +53,7 @@ class graph_attributes:
             _Es("warning: instantiating template '%s' for %s with bindings = %s "
                 "caused an exception (%s)\n" 
                 % (v, k, binding, e.args))
+            traceback.print_exc()
             if self._is_critical(k):
                 return None
             else:
@@ -168,6 +169,7 @@ class plots_spec:
             _Es("warning: instantiating template '%s' for %s with bindings = %s "
                 "caused an exception (%s)\n" 
                 % (v, k, binding, e.args))
+            traceback.print_exc()
             if self._is_critical(k):
                 return None
             else:
