@@ -64,7 +64,8 @@ class graph_attributes:
         except Exception,e:
             _Es("warning: applying callable %s (for %s) "
                 "raised an exception %s (bindings = %s)\n" 
-                % (v, k, e.args, binding))
+                % (f, k, e.args, binding))
+            traceback.print_exc()
             if self._is_critical(k):
                 return None
             else:
@@ -178,11 +179,12 @@ class plots_spec:
         except Exception,e:
             _Es("warning: applying callable %s (for %s) "
                 "raised an exception %s (bindings = %s)\n" 
-                % (v, k, e.args, binding))
+                % (f, k, e.args, binding))
+            traceback.print_exc()
             if self._is_critical(k):
                 return None
             else:
-                return v
+                return f
         
     def _expand_sql(self, sql, sg):
         db,query = sql[0],sql[1]
@@ -650,7 +652,7 @@ class smart_gnuplotter:
                                    functions, aggregates, collations, 
                                    single_row, single_col)
         except sqlite3.OperationalError,e:
-            _Es("error during sql query %s\n" % e.args[0])
+            _Es("error during sql query %s\n" % (e.args,))
             return None
 
     def do_sql(self, database, query, init_statements="", init_file="",
