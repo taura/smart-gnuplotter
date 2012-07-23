@@ -131,12 +131,13 @@ class graph_attributes:
 class plots_spec:
     def __init__(self, expr, kw, sg):
         K = kw.copy()
-        self.expr       = expr
-        self.plot_title = K.pop("plot_title", sg.default_plot_title)
-        self.plot_with  = K.pop("plot_with",  sg.default_plot_with)
-        self.using      = K.pop("using",      sg.default_using)
-        self.plot_attr  = K.pop("plot_attr",  sg.default_plot_attr)
-        self.symbolic_x = K.pop("symbolic_x", sg.default_symbolic_x)
+        self.expr           = expr
+        self.plot_title     = K.pop("plot_title", sg.default_plot_title)
+        self.plot_with      = K.pop("plot_with",  sg.default_plot_with)
+        self.using          = K.pop("using",      sg.default_using)
+        self.plot_attr      = K.pop("plot_attr",  sg.default_plot_attr)
+        self.symbolic_x     = K.pop("symbolic_x", sg.default_symbolic_x)
+        self.verbose_sql    = K.pop("verbose_sql", sg.default_verbose_sql)
         self.variable_order = K.pop("variable_order", [])
         for k,vals in K.items():
             if type(vals) is not types.ListType:
@@ -188,7 +189,7 @@ class plots_spec:
             else:
                 return f
         
-    def _expand_sql(self, sql, sg):
+    def _expand_sql(self, sql, verbose, sg):
         db,query = sql[0],sql[1]
         init_s = ""
         init_f = ""
@@ -200,11 +201,28 @@ class plots_spec:
         if len(sql) > 4: funcs = sql[4]
         if len(sql) > 5: aggrs = sql[5]
         if len(sql) > 6: colls = sql[6]
-        return sg._do_sql_noex(db, query, init_s, init_f, 
-                               funcs, aggrs, colls, 0, 0)
-    
+        if verbose:
+            _Es(r"""sql
+ db: %s
+ query: %s
+ init_s: %s
+ init_f: %s
+""" % (db, query, init_s, init_f))
+        e = sg._do_sql_noex(db, query, init_s, init_f, 
+                            funcs, aggrs, colls, 0, 0)
+        if verbose:
+            _Es(" result:\n")
+            for t in e:
+                for i,x in enumerate(t):
+                    _Es(" %s" % x)
+                _Es("\n")
+            _Es(" end:\n")
+        return e
 
     def _instantiate(self, binding, graph_binding, sg):
+        """
+        instantiate plot
+        """
         if _dbg>=3:
             _Es('    plots_spec.instantiate(binding=%s, graph_binding=%s)\n'
                % (binding, graph_binding))
@@ -237,7 +255,7 @@ class plots_spec:
             i = lambda x: self._safe_instantiate("expr", x, all_binding)
             sql = tuple(map(i, self.expr[:4])) + self.expr[4:]
             if sql[0] is None or sql[1] is None: return None
-            e = self._expand_sql(sql, sg)
+            e = self._expand_sql(sql, self.verbose_sql, sg)
             if e is None: return None
             return plots_spec(e, D, sg)
         else:
@@ -334,6 +352,7 @@ class smart_gnuplotter:
         self.default_plot_with = ""
         self.default_using = ""
         self.default_symbolic_x = 0
+        self.default_verbose_sql = 0
         self.default_plot_attr = ""
         # 
         self.default_overlays = []
