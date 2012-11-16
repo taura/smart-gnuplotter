@@ -211,12 +211,15 @@ class plots_spec:
         e = sg._do_sql_noex(db, query, init_s, init_f, 
                             funcs, aggrs, colls, 0, 0)
         if verbose:
-            _Es(" result:\n")
-            for t in e:
-                for i,x in enumerate(t):
-                    _Es(" %s" % x)
-                _Es("\n")
-            _Es(" end:\n")
+            if e is None:
+                _Es(" error occurred during sql query:\n")
+            else:
+                _Es(" result:\n")
+                for t in e:
+                    for i,x in enumerate(t):
+                        _Es(" %s" % x)
+                    _Es("\n")
+                _Es(" end:\n")
         return e
 
     def _instantiate(self, binding, graph_binding, sg):
@@ -253,7 +256,10 @@ class plots_spec:
         elif type(self.expr) is types.TupleType:
             # sql query
             i = lambda x: self._safe_instantiate("expr", x, all_binding)
-            sql = tuple(map(i, self.expr[:4])) + self.expr[4:]
+            if isinstance(self.expr[0], sqlite3.Connection):
+                sql = (self.expr[0],) + tuple(map(i, self.expr[1:4])) + self.expr[4:]
+            else:
+                sql = tuple(map(i, self.expr[:4])) + self.expr[4:]
             if sql[0] is None or sql[1] is None: return None
             e = self._expand_sql(sql, self.verbose_sql, sg)
             if e is None: return None
@@ -487,9 +493,14 @@ class smart_gnuplotter:
         E = []
         for ps in plots:
             e = []
+            assert (type(ps.expr) is not types.TupleType), ps.expr
             if type(ps.expr) is types.ListType or type(ps.expr) is types.TupleType:
-                # python list or query
-                e.append("'-'")
+                if len(ps.expr) == 0:
+                    _Es("warning: plot %s has no data (skipped)\n" % ps)
+                    continue
+                else:
+                    # python list or query
+                    e.append("'-'")
             else:
                 e.append(ps.expr)
             if ps.using != "": e.append("using %s" % ps.using)
@@ -497,12 +508,18 @@ class smart_gnuplotter:
             if ps.plot_title is not None: e.append('title "%s"' % ps.plot_title)
             e.append('%s' % ps.plot_attr)
             E.append(" ".join(e))
-        wp.write("%s %s\n" % (ga.plot, ", ".join(E)))
+        if len(E) == 0:
+            _Es("warning: plots %s have no data (skipped)\n" % plots)
+        else:
+            wp.write("%s %s\n" % (ga.plot, ", ".join(E)))
+        return len(E)
 
     def _write_plots_data(self, wp, plots, tics):
         for ps in plots:
             if type(ps.expr) is types.ListType:
-                if tics is None:
+                if len(ps.expr) == 0:
+                    continue
+                elif tics is None:
                     for row in ps.expr:
                         wp.write("%s\n" % " ".join(map(str, row)))
                 else:
@@ -609,7 +626,10 @@ class smart_gnuplotter:
         run init_statements and init_file,
         and return the connection object
         """
-        co = sqlite3.connect(database)
+        if isinstance(database, sqlite3.Connection):
+            co = database
+        else:
+            co = sqlite3.connect(database)
         if functions is None: 
             functions = self.default_functions
         else:
@@ -637,6 +657,11 @@ class smart_gnuplotter:
             co.executescript(script)
         return co
 
+    def open_sql(self, database, init_statements, init_file, 
+                 functions, aggregates, collations):
+        return self._open_sql(database, init_statements, init_file, 
+                              functions, aggregates, collations)
+
     def _do_sql_ex(self, database, query, init_statements, init_file,
                    functions, aggregates, collations, 
                    single_row, single_col):
@@ -662,7 +687,8 @@ class smart_gnuplotter:
             result = []
             for x in co.execute(query):
                 result.append(x)
-        co.close()
+        if co is not database:
+            co.close()
         return result
 
     def _do_sql_noex(self, database, query, init_statements, init_file,
@@ -740,20 +766,21 @@ class smart_gnuplotter:
         # set xtics ...
         tics = self._write_plots_tics(wp, plots)
         # plot expr with ..., expr with ..., ...
-        self._write_plots_exprs(wp, ga, plots)
-        self._write_plots_data(wp, plots, tics)
-        self._write_pause(wp, ga)
-        wp.close()
-        r = self._run_gnuplot(gpl_file)
-        self.all_graphs.append(ga)
-        if ga._is_epslatex():
-            output = self._ext_name(ga.output, ga)
-            self._fix_include_graphics(output)
-        if ga._is_display() and ga.pause < 0:
-            self._prompt(ga)
+        r = 0
+        if self._write_plots_exprs(wp, ga, plots) > 0:
+            self._write_plots_data(wp, plots, tics)
+            self._write_pause(wp, ga)
+            wp.close()
+            r = self._run_gnuplot(gpl_file)
+            self.all_graphs.append(ga)
+            if ga._is_epslatex():
+                output = self._ext_name(ga.output, ga)
+                self._fix_include_graphics(output)
+            if ga._is_display() and ga.pause < 0:
+                self._prompt(ga)
         if r:
             _Es("there was an error in gnuplot, file '%s' "
-               "left for your inspection\n" % gpl_file)
+                "left for your inspection\n" % gpl_file)
         else:
             self._cleanup_gpl(ga, gpl_file)
         return r
@@ -1069,7 +1096,14 @@ class smart_gnuplotter:
             if ga._is_epslatex():
                 wp.write(r"""
 %%\begin{figure}
+
+\begin{verbatim}
+%(filename)s
+\end{verbatim}
+
 \input{%(filename)s}
+
+
 %%\end{figure}
 """ % { "filename" : ga.output, "caption" : ga.output })
         wp.write(r"""
