@@ -21,17 +21,17 @@ class graph_attributes:
         self.pause       = K.pop("pause",       sg.default_pause)
         self.gpl_file    = K.pop("gpl_file",    sg.default_gpl_file)
         self.save_gpl    = K.pop("save_gpl",    sg.default_save_gpl)
-        self.variable_order = K.pop("variable_order", [])
+        self.graph_variable_order = K.pop("graph_variable_order", [])
         for k,vals in K.items():
             if type(vals) is not types.ListType:
                 _Es("warning: the value you supplied for graph parameter '%s' is not a list (%s). "
                    "the parameter '%s' ignored.\n" % (k, vals, k))
                 del K[k]
-        for k in self.variable_order:
+        for k in self.graph_variable_order:
             if k not in K:
-                _Es("warning: the variable you supplied in variable_order (%s) does not "
+                _Es("warning: the variable you supplied in graph_variable_order (%s) does not "
                     "appear in the keyword parameters (%s), ignored\n" % (k, K.keys()))
-                self.variable_order.remove(k)
+                self.graph_variable_order.remove(k)
         self.variables = K
 
     def _is_string(self, x):
@@ -138,17 +138,17 @@ class plots_spec:
         self.plot_attr      = K.pop("plot_attr",  sg.default_plot_attr)
         self.symbolic_x     = K.pop("symbolic_x", sg.default_symbolic_x)
         self.verbose_sql    = K.pop("verbose_sql", sg.default_verbose_sql)
-        self.variable_order = K.pop("variable_order", [])
+        self.plot_variable_order = K.pop("plot_variable_order", [])
         for k,vals in K.items():
             if type(vals) is not types.ListType:
                 _Es("warning: the value you supplied for plot parameter '%s' is not a list (%s). "
                    "the parameter '%s' ignored.\n" % (k, vals, k))
                 del K[k]
-        for k in self.variable_order:
+        for k in self.plot_variable_order:
             if k not in K:
-                _Es("warning: the variable you supplied in variable_order (%s) does not "
+                _Es("warning: the variable you supplied in plot_variable_order (%s) does not "
                     "appear in the keyword parameters (%s), ignored\n" % (k, K.keys()))
-                self.variable_order.remove(k)
+                self.plot_variable_order.remove(k)
         self.variables = K
 
     def _is_string(self, x):
@@ -452,7 +452,7 @@ class smart_gnuplotter:
             _Es('   expand_plots(graph_binding=%s)\n' % graph_binding)
         plots = []
         for p in self.plots:
-            bindings = self._expand_vars(p.variables, p.variable_order)
+            bindings = self._expand_vars(p.variables, p.plot_variable_order)
             if _dbg>=3:
                 _Es('    -> bindings = %s\n' % bindings)
             for binding in bindings:
@@ -1002,7 +1002,8 @@ class smart_gnuplotter:
         if self.quit: 
             _Es(' quit (self.quit == 1)\n')
             return self.quit
-        graph_bindings = self._expand_vars(self.graph_attr.variables, self.graph_attr.variable_order)
+        graph_bindings = self._expand_vars(self.graph_attr.variables,
+                                           self.graph_attr.graph_variable_order)
         self.graph_attr._canonicalize(self)
         for graph_binding in graph_bindings:
             ga = self.graph_attr._instantiate(graph_binding, self)
@@ -1066,8 +1067,8 @@ class smart_gnuplotter:
             _Es(' quit (self.quit == 1)\n')
             return self.quit
         g_variables,p_variables = self._separate_variables(kw, graph_vars)
-        if "variable_order" not in g_variables:
-            g_variables["variable_order"] = graph_vars
+        if "graph_variable_order" not in g_variables:
+            g_variables["graph_variable_order"] = graph_vars
         if _dbg>=3:
             _Es(' graph_variables:\n')
             self._show_kw(g_variables, 2)
