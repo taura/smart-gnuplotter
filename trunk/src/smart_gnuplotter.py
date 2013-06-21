@@ -202,7 +202,7 @@ class plots_spec:
         if len(sql) > 5: aggrs = sql[5]
         if len(sql) > 6: colls = sql[6]
         if verbose:
-            _Es(r"""sql
+            _Es(r"""==== sql ====
  db: %s
  query: %s
  init_s: %s
@@ -219,7 +219,7 @@ class plots_spec:
                     for i,x in enumerate(t):
                         _Es(" %s" % x)
                     _Es("\n")
-                _Es(" end:\n")
+                _Es("==== sql end ====\n")
         return e
 
     def _instantiate(self, binding, graph_binding, sg):
@@ -477,13 +477,29 @@ class smart_gnuplotter:
         for ps in plots:
             if type(ps.expr) is types.ListType:
                 if ps.symbolic_x or self._x_is_symbol(ps.expr):
+                    # assign each row a unique number
                     for row in ps.expr:
-                        if row[0] not in T:
-                            T[row[0]] = len(T)
+                        # row is a single record. for example, 
+                        # if the query is select a,b,c,x, row
+                        # is a four tuple. we extract all colums
+                        # except the last and use it as a symbol
+                        # displayed in the x-axis
+                        x = row[:-1]
+                        if x not in T:
+                            T[x] = len(T)
         if len(T) > 0:
             A = []
-            for k,v in T.items():
-                A.append('"%s" %d' % (k, v))
+            for x,v in T.items():
+                if callable(ps.symbolic_x):
+                    # e.g., symbolic_x = lambda x,y,z: "x=%s y=%s z=%" 
+                    s = ps.symbolic_x(*x)
+                elif self._is_string(ps.symbolic_x):
+                    # e.g., symbolic_x = "x=%s y=%s z=%" 
+                    s = ps.symbolic_x % x
+                else:
+                    # e.g., symbolic_x = 1
+                    s = " ".join(map(str, x))
+                A.append('"%s" %d' % (s, v))
             wp.write('set xtics (%s)\n' % ", ".join(A))
             return T
         else:
@@ -515,6 +531,9 @@ class smart_gnuplotter:
         return len(E)
 
     def _write_plots_data(self, wp, plots, tics):
+        """
+        tics : a dictionary mapping symbol -> numeric value
+        """
         for ps in plots:
             if type(ps.expr) is types.ListType:
                 if len(ps.expr) == 0:
@@ -523,8 +542,11 @@ class smart_gnuplotter:
                     for row in ps.expr:
                         wp.write("%s\n" % " ".join(map(str, row)))
                 else:
+                    # x is symbolic. convert the first row into a unique number
                     for row in ps.expr:
-                        row = (tics[row[0]],) + row[1:]
+                        # e.g., given tics = { ..., ("cilk",0) -> 3 ... },
+                        # convert ("cilk", 0, 15.3) --> (3, 15.3)
+                        row = (tics[row[:-1]], row[-1])
                         wp.write("%s\n" % " ".join(map(str, row)))
                 wp.write("e\n")
 
