@@ -1,4 +1,4 @@
-import sqlite3,sys,os,types,math,traceback,re
+import sqlite3,sys,os,types,math,traceback,re,time
 
 _dbg=0
 
@@ -60,6 +60,7 @@ class graph_attributes:
                 return v
 
     def _safe_apply(self, k, f, binding):
+        return f(binding)
         try:
             return f(binding)
         except Exception,e:
@@ -177,6 +178,7 @@ class plots_spec:
                 return v
 
     def _safe_apply(self, k, f, binding):
+        return f(binding)
         try:
             return f(binding)
         except Exception,e:
@@ -201,16 +203,22 @@ class plots_spec:
         if len(sql) > 4: funcs = sql[4]
         if len(sql) > 5: aggrs = sql[5]
         if len(sql) > 6: colls = sql[6]
-        if verbose:
+        if verbose>=2:
             _Es(r"""==== sql ====
  db: %s
  query: %s
  init_s: %s
  init_f: %s
 """ % (db, query, init_s, init_f))
+        if verbose>=1:
+            t0 = time.time()
+            _Es("sql begin ...\n")
         e = sg._do_sql_noex(db, query, init_s, init_f, 
-                            funcs, aggrs, colls, 0, 0)
-        if verbose:
+                            funcs, aggrs, colls, 0, 0, verbose)
+        if verbose>=1:
+            t1 = time.time()
+            _Es("... took %f sec\n" % (t1 - t0))
+        if verbose>=2:
             if e is None:
                 _Es(" error occurred during sql query:\n")
             else:
@@ -233,7 +241,13 @@ class plots_spec:
         all_binding.update(graph_binding)
         D = {}
         for k,v in self.__dict__.items():
-            if k == "variables" or k == "expr":
+            if k == "variables" or k == "expr" or k == "symbolic_x":
+                # the reason we exclude symbolic_x here and
+                # do not exclude other predefined keywords is ugly.
+                # symbolic_x may be callable, so if treated below,
+                # we might call it with the wrong number of args
+                # we need to implement similar things for other
+                # keywords that might cause trouble when treated below
                 pass
             else:
                 if callable(v):
@@ -372,6 +386,12 @@ class smart_gnuplotter:
         self.all_graphs = []
         self.quit = 0
 
+    def _is_string(self, x):
+        if type(x) is types.StringType or type(x) is types.UnicodeType:
+            return 1
+        else:
+            return 0
+
     def _show_kw(self, kw, indent):
         for k,v in kw.items():
             if k != "variables":
@@ -436,13 +456,21 @@ class smart_gnuplotter:
             for k,v in D.items():
                 # when the value is a tuple (e.g., "x" : (3, 4)),
                 # register "x[0]" : 3 and "x[1]" : 4 as well
-                if type(v) is types.TupleType:
-                    for i in range(len(v)):
-                        ki = "%s[%d]" % (k, i)
-                        vi = v[i]
-                        if _dbg>=3:
-                            _Es('     adding binding %s <- %s\n' % (ki, vi))
-                        E[ki] = vi
+                if 0:
+                    if type(v) is types.TupleType:
+                        for i in range(len(v)):
+                            ki = "%s[%d]" % (k, i)
+                            vi = v[i]
+                            if _dbg>=3:
+                                _Es('     adding binding %s <- %s\n' % (ki, vi))
+                            E[ki] = vi
+                else:
+                    if type(v) is types.TupleType:
+                        for i,ki in enumerate(k.split("__", len(v)-1)):
+                            vi = v[i]
+                            if _dbg>=3:
+                                _Es('     adding binding %s <- %s\n' % (ki, vi))
+                            E[ki] = vi
             R.append(E)
         return R
 
@@ -507,6 +535,8 @@ class smart_gnuplotter:
 
     def _write_plots_exprs(self, wp, ga, plots):
         E = []
+        if _dbg>=1:
+            _Es('  %d plots\n' % len(plots))
         for ps in plots:
             e = []
             assert (type(ps.expr) is not types.TupleType), ps.expr
@@ -629,7 +659,7 @@ class smart_gnuplotter:
             wp.write('%s\n'                % ga.graph_attr)
 
     def _open_sql(self, database, init_statements, init_file, 
-                  functions, aggregates, collations):
+                  functions, aggregates, collations, verbose):
         """
         database    : string : filename of an sqlite3 database 
         init_statements : string : sql statement(s) to run
@@ -651,6 +681,8 @@ class smart_gnuplotter:
         if isinstance(database, sqlite3.Connection):
             co = database
         else:
+            if verbose>=1:
+                _Es("open sql connection\n")
             co = sqlite3.connect(database)
         if functions is None: 
             functions = self.default_functions
@@ -679,20 +711,23 @@ class smart_gnuplotter:
             co.executescript(script)
         return co
 
-    def open_sql(self, database, init_statements, init_file, 
-                 functions, aggregates, collations):
+    def open_sql(self, database, init_statements="", init_file="", 
+                 functions=None, aggregates=None, collations=None, verbose=0):
+        if functions is None:  functions = []
+        if aggregates is None: aggregates = []
+        if collations is None: collations = []
         return self._open_sql(database, init_statements, init_file, 
-                              functions, aggregates, collations)
-
+                              functions, aggregates, collations, verbose)
+    
     def _do_sql_ex(self, database, query, init_statements, init_file,
                    functions, aggregates, collations, 
-                   single_row, single_col):
+                   single_row, single_col, verbose):
         if _dbg>=3:
-            _Es("   do_sql_ex(database=%s,query=%s,init_statements=%s,init_file=%s,functions=%s,aggregates=%s,collations=%s,single_row=%s,single_col=%s)\n" 
+            _Es("   do_sql_ex(database=%s,query=%s,init_statements=%s,init_file=%s,functions=%s,aggregates=%s,collations=%s,single_row=%s,single_col=%s, verbose=%s)\n" 
                % (database, query, init_statements, init_file, 
-                  functions, aggregates, collations, single_row, single_col))
+                  functions, aggregates, collations, single_row, single_col, verbose))
         co = self._open_sql(database, init_statements, init_file, 
-                            functions, aggregates, collations)
+                            functions, aggregates, collations, verbose)
         if single_row and single_col:
             for (result,) in co.execute(query):
                 break
@@ -715,18 +750,18 @@ class smart_gnuplotter:
 
     def _do_sql_noex(self, database, query, init_statements, init_file,
                      functions, aggregates, collations, 
-                     single_row, single_col):
+                     single_row, single_col, verbose):
         try:
             return self._do_sql_ex(database, query, init_statements, init_file,
                                    functions, aggregates, collations, 
-                                   single_row, single_col)
+                                   single_row, single_col, verbose)
         except sqlite3.OperationalError,e:
             _Es("error during sql query %s\n" % (e.args,))
             return None
 
     def do_sql(self, database, query, init_statements="", init_file="",
                functions=[], aggregates=[], collations=[], 
-               single_row=0, single_col=0):
+               single_row=0, single_col=0, verbose=0):
         """
         database    : string : filename of an sqlite3 database 
         init_statements : string : sql statement(s) to run
@@ -758,7 +793,7 @@ class smart_gnuplotter:
         """
         return self._do_sql_noex(database, query, init_statements, init_file,
                                  functions, aggregates, collations, 
-                                 single_row, single_col)
+                                 single_row, single_col, verbose)
 
     def _prompt(self, ga):
         _Es("[s/q/<num>/other]? ")
@@ -1027,6 +1062,8 @@ class smart_gnuplotter:
         graph_bindings = self._expand_vars(self.graph_attr.variables,
                                            self.graph_attr.graph_variable_order)
         self.graph_attr._canonicalize(self)
+        if _dbg>=1:
+            _Es(' %d graphs\n' % len(graph_bindings))
         for graph_binding in graph_bindings:
             ga = self.graph_attr._instantiate(graph_binding, self)
             if ga is None: return 1 # NG
