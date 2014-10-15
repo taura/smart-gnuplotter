@@ -178,7 +178,7 @@ class plots_spec:
                 return v
 
     def _safe_apply(self, k, f, binding):
-        return f(binding)
+        # return f(binding)
         try:
             return f(binding)
         except Exception,e:
@@ -218,16 +218,17 @@ class plots_spec:
         if verbose>=1:
             t1 = time.time()
             _Es("... took %f sec\n" % (t1 - t0))
+        if e is None:
+            _Es(" error occurred during sql query:\n")
+        elif len(e) == 0:
+            _Es("warning: the following query has no data\n************\n%s\n************\n" % query)
         if verbose>=2:
-            if e is None:
-                _Es(" error occurred during sql query:\n")
-            else:
-                _Es(" result:\n")
-                for t in e:
-                    for i,x in enumerate(t):
-                        _Es(" %s" % x)
-                    _Es("\n")
-                _Es("==== sql end ====\n")
+            _Es(" result:\n")
+            for t in e:
+                for i,x in enumerate(t):
+                    _Es(" %s" % x)
+                _Es("\n")
+            _Es("==== sql end ====\n")
         return e
 
     def _instantiate(self, binding, graph_binding, sg):
@@ -241,7 +242,7 @@ class plots_spec:
         all_binding.update(graph_binding)
         D = {}
         for k,v in self.__dict__.items():
-            if k == "variables" or k == "expr" or k == "symbolic_x":
+            if k == "variables" or k == "expr":
                 # the reason we exclude symbolic_x here and
                 # do not exclude other predefined keywords is ugly.
                 # symbolic_x may be callable, so if treated below,
@@ -540,9 +541,9 @@ class smart_gnuplotter:
         for ps in plots:
             e = []
             assert (type(ps.expr) is not types.TupleType), ps.expr
-            if type(ps.expr) is types.ListType or type(ps.expr) is types.TupleType:
+            if type(ps.expr) is types.ListType \
+               or type(ps.expr) is types.TupleType:
                 if len(ps.expr) == 0:
-                    _Es("warning: plot %s has no data (skipped)\n" % ps)
                     continue
                 else:
                     # python list or query
@@ -832,7 +833,7 @@ class smart_gnuplotter:
             self.all_graphs.append(ga)
             if ga._is_epslatex():
                 output = self._ext_name(ga.output, ga)
-                self._fix_include_graphics(output)
+                # self._fix_include_graphics(output)
             if ga._is_display() and ga.pause < 0:
                 self._prompt(ga)
         if r:
@@ -1077,7 +1078,7 @@ class smart_gnuplotter:
                 return r
         return 0
 
-    def graphs(self, expr, graph_vars=[], overlays=[], **kw):
+    def graphs(self, expr, graph_vars=None, overlays=None, **kw):
         """
         show graphs, with specified graph attributes as well
         as plot attributes.  In summary, 
@@ -1118,6 +1119,8 @@ class smart_gnuplotter:
         of calls to add_plots() and finally call show_graphs().
         
         """
+        if graph_vars is None: graph_vars = []
+        if overlays is None: overlays = []
         if _dbg>=3:
             _Es('graphs("%s", graph_vars=%s, overlays=%s)\n' 
                % (expr, graph_vars, overlays))
@@ -1142,7 +1145,7 @@ class smart_gnuplotter:
     def generate_tex_file(self, tex_file):
         wp = open(tex_file, "wb")
         wp.write(r"""
-\documentclass[8pt,dvipdfm]{article}
+\documentclass[8pt,dvipdfmx]{article}
 \setlength{\oddsidemargin}{-1.3truecm}
 \setlength{\evensidemargin}{-1.3truecm}
 \setlength{\textwidth}{18.5truecm}
