@@ -252,7 +252,7 @@ class plots_spec:
                 pass
             else:
                 if callable(v):
-                    new_v = self._safe_apply(k, v, binding)
+                    new_v = self._safe_apply(k, v, all_binding)
                     if new_v is None: return None
                 elif self._is_string(v):
                     if _dbg>=4:
@@ -264,7 +264,11 @@ class plots_spec:
                 D[k] = new_v
         for k,v in self.variables.items():
             D[k] = v
-        if self._is_string(self.expr):
+        if callable(self.expr):
+            e = self._safe_apply("expr", self.expr, all_binding)
+            if e is None: return None
+            return plots_spec(e, D, sg)
+        elif self._is_string(self.expr):
             e = self._safe_instantiate("expr", self.expr, all_binding)
             if e is None: return None
             return plots_spec(e, D, sg)
@@ -505,7 +509,7 @@ class smart_gnuplotter:
         T = {}                  # symbol -> position
         for ps in plots:
             if type(ps.expr) is types.ListType:
-                if ps.symbolic_x or self._x_is_symbol(ps.expr):
+                if ps.symbolic_x: #  or self._x_is_symbol(ps.expr)
                     # assign each row a unique number
                     for row in ps.expr:
                         # row is a single record. for example, 
