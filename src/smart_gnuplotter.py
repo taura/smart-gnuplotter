@@ -1235,7 +1235,7 @@ class confidence_interval:
         # empirical average
         mu = sum(X) / float(n)
         # unbiased variance
-        U = sum([ (x - mu) * (x - mu) for x in X ]) / float(n - 1)
+        U = math.sqrt(sum([ (x - mu) * (x - mu) for x in X ]) / float(n - 1))
         t = self._t_table(n - 1, significance_level)
         dm = t * U / math.sqrt(n)
         return (mu, dm)
